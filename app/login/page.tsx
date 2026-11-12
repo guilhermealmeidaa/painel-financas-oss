@@ -47,6 +47,10 @@ export default function LoginPage() {
           {loading ? "Entrando…" : "Entrar"}
         </Button>
       </form>
+      <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+        Primeiro acesso? O usuário é criado no seu projeto do Supabase, em <b className="text-foreground">Authentication → Users → Add user</b>.
+        Depois de entrar, a tela <b className="text-foreground">Primeiros passos</b> guia o resto.
+      </p>
     </main>
   );
 }

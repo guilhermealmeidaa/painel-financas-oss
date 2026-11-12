@@ -5,13 +5,13 @@ import { ArrowRight, Check, Circle, Rocket } from "lucide-react";
 import { PageHeader } from "@/components/month-header";
 import { Panel } from "@/components/panel";
 import { PreferencesEditor } from "@/components/plan/plan-editors";
-import { monthOf, todayISO } from "@/lib/dates";
 import { bucketLabels } from "@/lib/labels";
-import { serverSetup } from "@/lib/setup-status";
+import { onboardingStatus, type StepId } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 
 function Step({
+  id,
   n,
   done,
   optional,
@@ -19,6 +19,7 @@ function Step({
   children,
   action,
 }: {
+  id: string;
   n: number;
   done: boolean;
   optional?: boolean;
@@ -27,7 +28,7 @@ function Step({
   action?: { href: string; label: string };
 }) {
   return (
-    <li className="surface flex gap-4 p-5 sm:p-6">
+    <li id={id} className="surface flex scroll-mt-4 gap-4 p-5 sm:p-6">
       <span
         className={cn(
           "grid size-8 shrink-0 place-items-center rounded-full text-[13px] font-bold",
@@ -62,22 +63,31 @@ function Step({
 async function Steps() {
   await connection();
   const supabase = await createClient();
-  const month = monthOf(todayISO());
-  const [{ data: settings }, { count: items }, { count: incomes }, { count: budgets }, { count: pending }, { count: tokens }] = await Promise.all([
-    supabase.from("settings").select("label_lazer, label_mercado, self_names, self_tax_ids").maybeSingle(),
-    supabase.from("pluggy_items").select("id", { count: "exact", head: true }),
-    supabase.from("incomes").select("id", { count: "exact", head: true }).eq("month", month),
-    supabase.from("monthly_budgets").select("id", { count: "exact", head: true }).eq("month", month),
-    supabase.from("transactions").select("id", { count: "exact", head: true }).eq("bucket", "sem_categoria"),
-    supabase.from("api_tokens").select("id", { count: "exact", head: true }).is("revoked_at", null),
-  ]);
-  const setup = serverSetup();
+  const st = await onboardingStatus(supabase);
+  const { settings, setup, pending } = st;
+  const done = (id: StepId) => st.steps.find((x) => x.id === id)!.done;
   const labels = bucketLabels(settings);
-  const connected = (items ?? 0) > 0;
+  const pct = Math.round((st.requiredDone / st.requiredTotal) * 100);
 
   return (
+    <>
+    <section className="surface flex flex-col gap-3 p-5 sm:p-6" aria-label="Progresso">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-[15px] font-semibold">
+          {st.next ? `${st.requiredDone} de ${st.requiredTotal} etapas prontas` : "Tudo pronto. O painel já está trabalhando com os seus dados."}
+        </p>
+        {st.next && (
+          <a href={st.next.href} className="text-[13px] font-semibold text-primary hover:underline">
+            Próxima: {st.next.title}
+          </a>
+        )}
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+        <div className={cn("h-full rounded-full", st.next ? "bg-primary" : "bg-positive")} style={{ width: `${pct}%` }} />
+      </div>
+    </section>
     <ol className="flex flex-col gap-3">
-      <Step n={1} done={setup.missingRequired.length === 0} title="Ligue o servidor ao Supabase e à Pluggy">
+      <Step id="servidor" n={1} done={done("servidor")} title="Ligue o servidor ao Supabase e à Pluggy">
         <p>
           O painel guarda tudo no seu próprio projeto do <b>Supabase</b> e busca os extratos pela <b>Pluggy</b> (Open Finance). As chaves
           ficam só no servidor, no arquivo <code>.env.local</code> (ou nas variáveis de ambiente da Vercel). O passo a passo completo está no
@@ -95,7 +105,7 @@ async function Steps() {
         </ul>
       </Step>
 
-      <Step n={2} done={Boolean(settings)} title="Conte quem é você e como chama seus gastos do dia a dia">
+      <Step id="preferencias" n={2} done={done("preferencias")} title="Conte quem é você e como chama seus gastos do dia a dia">
         <p>
           O dia a dia tem duas categorias com teto: hoje elas se chamam <b>{labels.lazer}</b> e <b>{labels.mercado}</b>. Seu nome e CPF/CNPJ
           servem só para reconhecer Pix entre as suas próprias contas, que não são gasto.
@@ -113,8 +123,9 @@ async function Steps() {
       </Step>
 
       <Step
+        id="plano"
         n={3}
-        done={(incomes ?? 0) > 0 && (budgets ?? 0) > 0}
+        done={done("plano")}
         title="Monte o plano do mês"
         action={{ href: "/planejamento", label: "Abrir Planejamento" }}
       >
@@ -125,7 +136,7 @@ async function Steps() {
         </p>
       </Step>
 
-      <Step n={4} done={connected} title="Conecte seus bancos" action={{ href: "/conexoes", label: "Abrir Conexões" }}>
+      <Step id="bancos" n={4} done={done("bancos")} title="Conecte seus bancos" action={{ href: "/conexoes", label: "Abrir Conexões" }}>
         <p>
           Primeiro, entre em <b>meu.pluggy.ai</b> e autorize lá cada banco que você usa. Depois, em <b>Conexões</b>, toque em{" "}
           <b>Conectar com Meu Pluggy</b> e entre com a mesma conta. O painel puxa contas, cartões, faturas e os lançamentos dos últimos 90
@@ -138,10 +149,11 @@ async function Steps() {
       </Step>
 
       <Step
+        id="triagem"
         n={5}
-        done={connected && (pending ?? 0) === 0}
+        done={done("triagem")}
         title="Revise a triagem"
-        action={{ href: "/triagem", label: (pending ?? 0) > 0 ? `Classificar ${pending} gastos` : "Abrir Triagem" }}
+        action={{ href: "/triagem", label: pending > 0 ? `Classificar ${pending} gastos` : "Abrir Triagem" }}
       >
         <p>
           O painel classifica sozinho o que consegue (pagamento de fatura, transferências suas, IOF, regras) e mostra o motivo de cada
@@ -150,7 +162,7 @@ async function Steps() {
         </p>
       </Step>
 
-      <Step n={6} done={false} optional title="Deixe o sync automático">
+      <Step id="sync" n={6} done={done("sync")} optional title="Deixe o sync automático">
         <p>
           Publicado na <b>Vercel</b>, o painel sincroniza 1 vez por dia sozinho (plano grátis). Para sincronizar a cada 3 horas, o repositório
           já traz o workflow <code>.github/workflows/sync.yml</code>: cadastre o segredo <code>CRON_SECRET</code> e a variável <code>APP_URL</code>{" "}
@@ -158,13 +170,14 @@ async function Steps() {
         </p>
       </Step>
 
-      <Step n={7} done={(tokens ?? 0) > 0} optional title="Converse com o Claude sobre as suas finanças" action={{ href: "/acesso-claude", label: "Gerar token" }}>
+      <Step id="claude" n={7} done={done("claude")} optional title="Converse com o Claude sobre as suas finanças" action={{ href: "/acesso-claude", label: "Gerar token" }}>
         <p>
           O painel tem um servidor MCP <b>somente leitura</b>. Gere um token em <b>Acesso do Claude</b> e adicione o conector no Claude
           (instruções em <code>docs/mcp.md</code>). Ele vê saldo, faturas e projeção, mas não muda nada.
         </p>
       </Step>
     </ol>
+    </>
   );
 }
 

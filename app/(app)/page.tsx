@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Suspense } from "react";
+import { OnboardingBanner } from "@/components/home/onboarding-banner";
 import { redirect } from "next/navigation";
 import { DEMO } from "@/lib/demo-flag";
 import { Inbox, Receipt } from "lucide-react";
@@ -89,6 +91,12 @@ export default async function HomePage(props: PageProps<"/">) {
   return (
     <>
       <MonthHeader month={month} basePath="/" min={first} max={last} current={current} />
+
+      {!DEMO && (
+        <Suspense fallback={null}>
+          <OnboardingBanner />
+        </Suspense>
+      )}
 
       {feeTotal > 0 && (
         <p className="surface flex items-center gap-3 px-5 py-3 text-[13px]">

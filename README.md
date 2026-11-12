@@ -51,7 +51,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Abra http://localhost:3000, entre com o usuário que você criou e siga a tela **Primeiros passos**: ela mostra o que falta configurar e guia o resto (preferências, plano do mês, conectar bancos e triagem).
+Abra http://localhost:3000. Se faltar alguma chave do Supabase, o painel mostra a tela **Vamos configurar** com o que falta. Com tudo certo, entre com o usuário que você criou e siga a tela **Primeiros passos**: ela mostra o que falta configurar e guia o resto (preferências, plano do mês, conectar bancos e triagem).
 
 ## Publicar na Vercel
 
@@ -72,6 +72,10 @@ Abra http://localhost:3000, entre com o usuário que você criou e siga a tela *
 | **Triagem** | O que o banco mandou sem categoria e tudo o que o painel decidiu sozinho, com o motivo |
 | **Conexões** | Conectar bancos, ligar cartões do banco aos seus e sincronizar agora |
 | **Acesso do Claude** | Token para um servidor MCP somente leitura (veja [`docs/mcp.md`](docs/mcp.md)) |
+
+## Instalando com a ajuda do Claude
+
+O repositório traz um [`CLAUDE.md`](CLAUDE.md) que explica o projeto (arquitetura, regras de negócio e de segurança) e o roteiro de instalação. Abra a pasta no [Claude Code](https://claude.com/claude-code) e peça: *"me ajude a instalar o painel"*.
 
 ## Desenvolvimento
 

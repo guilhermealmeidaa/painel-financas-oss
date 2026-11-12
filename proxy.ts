@@ -20,6 +20,18 @@ export async function proxy(request: NextRequest) {
     }
     return NextResponse.next({ request });
   }
+  // Instalação nova, sem Supabase configurado: nem o login funciona. Tudo vai para /configurar,
+  // que explica o passo a passo (página pública que só diz quais variáveis faltam, nunca os valores).
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) {
+    const p = request.nextUrl.pathname;
+    if (p.startsWith("/api/")) return NextResponse.json({ error: "Supabase não configurado" }, { status: 503 });
+    if (p === "/configurar") return NextResponse.next({ request });
+    const url = request.nextUrl.clone();
+    url.pathname = "/configurar";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
