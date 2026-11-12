@@ -1,0 +1,395 @@
+import "server-only";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod";
+import { billsForMonth } from "@/lib/bills";
+import { monthStatus } from "@/lib/budget";
+import { invoiceInputs, loadAllFor, runProjection, type AllData } from "@/lib/data";
+import { addMonths, monthOf, monthRange, monthsBetween, todayISO } from "@/lib/dates";
+import { installmentsFromInvoices, invoicesForMonth, prepareInvoices } from "@/lib/invoices";
+import { METHOD_LABEL, bucketLabels } from "@/lib/labels";
+import { countsInDaily, installmentAmountInMonth, installmentEndMonth } from "@/lib/projection";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { findDuplicates } from "@/lib/duplicates";
+
+/**
+ * Ferramentas SOMENTE LEITURA para o Claude responder perguntas sobre as finanças.
+ * Nenhuma ferramenta escreve no banco. Valores em reais (número com 2 casas).
+ */
+
+const reais = (cents: number) => Math.round(cents) / 100;
+const MONTH = z
+  .string()
+  .regex(/^\d{4}-\d{2}$/, "use AAAA-MM")
+  .describe("Mês no formato AAAA-MM (ex.: 2026-12). Padrão: mês atual em São Paulo.");
+
+type Ctx = { http?: { authInfo?: { extra?: Record<string, unknown> } } };
+
+async function dataFor(ctx: Ctx): Promise<AllData> {
+  const userId = ctx.http?.authInfo?.extra?.userId;
+  if (typeof userId !== "string") throw new Error("não autorizado");
+  const admin = createAdminClient();
+  if (!admin) throw new Error("servidor sem SUPABASE_SERVICE_ROLE_KEY");
+  return loadAllFor(admin, userId);
+}
+
+const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const toMonth = (m?: string) => (m ? `${m}-01` : monthOf(todayISO()));
+
+export function registerFinanceTools(server: McpServer) {
+  server.registerTool(
+    "resumo_do_mes",
+    {
+      title: "Resumo do mês",
+      description:
+        "Visão geral de um mês: saldo previsto no fim do mês, entradas, fixos, fatura do crédito, parcelas, " +
+        "dia a dia (teto, gasto, sobra por bucket lazer/mercado, ritmo por fim de semana) e contas a pagar. " +
+        "Use para perguntas como 'quanto ainda posso gastar?' ou 'como fecha dezembro?'.",
+      inputSchema: z.object({ mes: MONTH.optional() }),
+      annotations: READ_ONLY,
+    },
+    async ({ mes }, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const today = todayISO();
+      const month = toMonth(mes);
+      const rows = runProjection(d);
+      const row = rows.find((r) => r.month === month);
+      const budget = d.budgets.find((b) => b.month === month);
+      const status = budget
+        ? monthStatus({
+            today,
+            month,
+            controlStart: budget.control_start,
+            capCents: budget.cap_cents,
+            allocations: budget.allocations,
+            transactions: d.transactions,
+            skippedWeekends: budget.skipped_weekends,
+          })
+        : null;
+      const { bills, total, paidTotal } = billsForMonth({ ...invoiceInputs(d), month, payments: d.payments });
+      const pending = d.transactions.filter((t) => monthOf(t.occurred_on) === month && t.bucket === "sem_categoria");
+      return json({
+        mes: month.slice(0, 7),
+        hoje: today,
+        valores_em: "reais",
+        projecao: row
+          ? {
+              ...(row.opening != null
+                ? {
+                    saldo_hoje_nas_contas: reais(row.opening),
+                    como_calcula:
+                      "mês atual: saldo de hoje + entradas que ainda não caíram − fixos e faturas não pagos − dia a dia no débito/Pix que falta",
+                  }
+                : {}),
+              saldo_no_fim_do_mes: reais(row.balance),
+              resultado_do_mes_sozinho: reais(row.net),
+              entradas: reais(row.income),
+              fixos_fora_do_cartao: reais(row.fixed),
+              faturas_dos_cartoes: reais(row.creditInvoice),
+              fixos_avulsos_e_assinaturas_na_conta: reais(row.extras),
+              dia_a_dia_debito_pix: reais(row.daily),
+              alertas: { mes_negativo: row.alerts.negativeMonth, saldo_abaixo_de_500: row.alerts.lowBalance },
+            }
+          : "mês fora do período da projeção",
+        dia_a_dia: status
+          ? {
+              meio: budget!.method === "credito" ? "crédito (vai pra fatura do mês seguinte)" : "débito/Pix",
+              conta_a_partir_de: budget!.control_start ?? month,
+              regra: "lazer e mercado, do início do controle até hoje (compras com data futura ainda não contam)",
+              teto: reais(status.cap),
+              gasto: reais(status.spent),
+              ainda_posso_gastar: reais(status.remaining),
+              por_bucket: status.buckets.map((b) => ({
+                bucket: bucketLabels(d.settings)[b.bucket],
+                orcado: reais(b.budgeted),
+                gasto: reais(b.spent),
+                sobra: reais(b.remaining),
+              })),
+              fins_de_semana_restantes: status.weekends,
+              por_fim_de_semana: status.perWeekend ? reais(status.perWeekend.total) : null,
+            }
+          : "sem orçamento cadastrado para o mês",
+        sem_categoria_fora_da_conta: {
+          aviso: "gastos do banco ainda não classificados; NÃO entram no dia a dia nem na projeção até serem classificados",
+          quantidade: pending.length,
+          total: reais(pending.reduce((s, t) => s + t.amount_cents, 0)),
+        },
+        contas_a_pagar: {
+          total: reais(total),
+          ja_pagas: reais(paidTotal),
+          itens: bills.map((b) => ({ nome: b.name, valor: reais(b.cents), paga: b.paid })),
+        },
+      });
+    },
+  );
+
+  server.registerTool(
+    "projecao",
+    {
+      title: "Projeção mês a mês",
+      description:
+        "Saldo projetado na conta mês a mês (entradas, fixos, faturas dos cartões, dia a dia no débito/Pix, " +
+        "resultado do mês e saldo acumulado), com alertas de mês negativo e saldo abaixo de R$ 500.",
+      inputSchema: z.object({
+        incluir_planejadas: z.boolean().optional().describe("Incluir compras ainda só planejadas (ex.: presente)."),
+      }),
+      annotations: READ_ONLY,
+    },
+    async ({ incluir_planejadas }, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const rows = runProjection(d, incluir_planejadas ?? false);
+      return json({
+        valores_em: "reais",
+        incluiu_planejadas: incluir_planejadas ?? false,
+        planejadas: d.installments.filter((i) => i.status === "planejada").map((i) => i.name),
+        meses: rows.map((r) => ({
+          mes: r.month.slice(0, 7),
+          ...(r.opening != null ? { saldo_hoje_nas_contas: reais(r.opening), observacao: "mês atual: só o que ainda falta acontecer" } : {}),
+          entradas: reais(r.income),
+          fixos_fora_do_cartao: reais(r.fixed),
+          faturas_dos_cartoes: reais(r.creditInvoice),
+          fixos_avulsos_e_assinaturas_na_conta: reais(r.extras),
+          dia_a_dia_debito_pix: reais(r.daily),
+          dia_a_dia_no_credito: reais(r.dailyOnCredit),
+          resultado_do_mes: reais(r.net),
+          saldo_no_fim: reais(r.balance),
+          mes_negativo: r.alerts.negativeMonth,
+          saldo_abaixo_de_500: r.alerts.lowBalance,
+        })),
+      });
+    },
+  );
+
+  server.registerTool(
+    "transacoes",
+    {
+      title: "Transações",
+      description:
+        "Lista gastos e lançamentos (manuais e do banco via Pluggy), do mais recente para o mais antigo. " +
+        "Filtra por período, bucket e texto da descrição.",
+      inputSchema: z.object({
+        de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Data inicial AAAA-MM-DD"),
+        ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Data final AAAA-MM-DD"),
+        bucket: z.enum(["lazer", "mercado", "fixo", "assinatura", "parcela", "ignorar", "sem_categoria"]).optional(),
+        busca: z.string().max(60).optional().describe("Trecho da descrição (sem diferenciar maiúsculas)"),
+        limite: z.number().int().min(1).max(300).optional().describe("Máximo de itens (padrão 100)"),
+        incluir_futuras: z.boolean().optional().describe("Incluir parcelas com data futura (padrão: não; a lista vai só até hoje)"),
+      }),
+      annotations: READ_ONLY,
+    },
+    async ({ de, ate, bucket, busca, limite, incluir_futuras }, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const names = new Map(d.accounts.map((a) => [a.id, a.name.trim()]));
+      const hoje = todayISO();
+      const q = busca?.toLowerCase();
+      const list = d.transactions.filter(
+        (t) =>
+          (!de || t.occurred_on >= de) &&
+          (!ate || t.occurred_on <= ate) &&
+          (incluir_futuras || t.occurred_on <= hoje) &&
+          (!bucket || t.bucket === bucket) &&
+          (!q || t.description.toLowerCase().includes(q)),
+      );
+      const shown = list.slice(0, limite ?? 100);
+      // mesma regra do resumo_do_mes para dizer o que entra no dia a dia
+      const counts = (t: (typeof list)[number]) => {
+        const m = monthOf(t.occurred_on);
+        const b = d.budgets.find((x) => x.month === m);
+        return countsInDaily(t, { month: m, controlStart: b?.control_start ?? null, today: hoje });
+      };
+      return json({
+        valores_em: "reais",
+        total_encontrado: list.length,
+        soma: reais(list.filter((t) => !t.is_inflow).reduce((s, t) => s + t.amount_cents, 0)),
+        soma_que_conta_no_dia_a_dia: reais(list.filter(counts).reduce((s, t) => s + t.amount_cents, 0)),
+        itens: shown.map((t) => ({
+          id: t.id,
+          data: t.occurred_on,
+          descricao: t.description,
+          valor: reais(t.amount_cents),
+          entrada: t.is_inflow,
+          meio: METHOD_LABEL[t.method],
+          bucket: bucketLabels(d.settings)[t.bucket],
+          conta: t.account_id ? (names.get(t.account_id) ?? null) : null,
+          parcela: t.total_installments ? `${t.installment_number ?? "?"}/${t.total_installments}` : null,
+          // origem "manual" + do_banco=true: lançamento seu já juntado com a compra do banco (conta 1 vez)
+          origem: t.source,
+          do_banco: Boolean(t.external_id),
+          status: t.pluggy_status,
+          conta_no_dia_a_dia: counts(t),
+          criado_em: t.created_at,
+        })),
+      });
+    },
+  );
+
+  server.registerTool(
+    "possiveis_duplicatas",
+    {
+      title: "Possíveis gastos repetidos",
+      description:
+        "Procura pares de transações que parecem o MESMO gasto contado duas vezes: mesmo valor (até 2% ou R$ 1 de diferença), " +
+        "datas a até 3 dias, ambas saídas e não ignoradas. Mostra por que cada par é suspeito " +
+        "(manual × banco, mesmo id no banco, PENDING × POSTED, contas diferentes). Use para investigar números estranhos.",
+      inputSchema: z.object({
+        de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Data inicial AAAA-MM-DD (padrão: 1º dia do mês atual)"),
+        ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Data final AAAA-MM-DD"),
+        incluir_parcelas: z.boolean().optional().describe("Incluir bucket 'parcela' (padrão: não)"),
+      }),
+      annotations: READ_ONLY,
+    },
+    async ({ de, ate, incluir_parcelas }, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const names = new Map(d.accounts.map((a) => [a.id, a.name]));
+      const from = de ?? monthOf(todayISO());
+      const txs = d.transactions.filter(
+        (t) =>
+          t.occurred_on >= from &&
+          (!ate || t.occurred_on <= ate) &&
+          !t.is_inflow &&
+          t.bucket !== "ignorar" &&
+          (incluir_parcelas || t.bucket !== "parcela"),
+      );
+      const view = (t: (typeof txs)[number]) => ({
+        id: t.id,
+        data: t.occurred_on,
+        descricao: t.description,
+        valor: reais(t.amount_cents),
+        bucket: bucketLabels(d.settings)[t.bucket],
+        meio: METHOD_LABEL[t.method],
+        conta: t.account_id ? (names.get(t.account_id) ?? null) : null,
+        origem: t.source,
+        do_banco: Boolean(t.external_id),
+        status: t.pluggy_status,
+        parcela: t.total_installments ? `${t.installment_number ?? "?"}/${t.total_installments}` : null,
+      });
+      // regra 8: só pares com evidência forte; Pix no crédito, juntados e substituídos ficam de fora
+      const pares = findDuplicates(txs, { includeInstallments: incluir_parcelas }).map((p) => ({
+        diferenca: reais(p.diff),
+        motivos: p.reasons,
+        a: view(p.a as (typeof txs)[number]),
+        b: view(p.b as (typeof txs)[number]),
+      }));
+      return json({
+        periodo: { de: from, ate: ate ?? null },
+        transacoes_analisadas: txs.length,
+        pares_suspeitos: pares.length,
+        observacao:
+          "Só aparecem pares com evidência forte: mesma pessoa/loja, manual × banco, mesmo id ou PENDING × POSTED na mesma conta. " +
+          "Pix no crédito (conta × cartão) já é tratado automaticamente e não aparece aqui.",
+        pares: pares.slice(0, 100),
+      });
+    },
+  );
+
+  server.registerTool(
+    "faturas",
+    {
+      title: "Faturas dos cartões",
+      description:
+        "Fatura prevista (ou real, quando o banco já fechou) de cada cartão num mês de vencimento, com as linhas que compõem o valor, " +
+        "além do limite disponível quando vem da Pluggy.",
+      inputSchema: z.object({ mes: MONTH.optional() }),
+      annotations: READ_ONLY,
+    },
+    async ({ mes }, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const month = toMonth(mes);
+      const inv = invoicesForMonth({ ...invoiceInputs(d), month });
+      return json({
+        mes_de_vencimento: month.slice(0, 7),
+        valores_em: "reais",
+        total: reais(inv.total),
+        alertas: [
+          ...(inv.unlinkedSeedCards.length
+            ? [`Cartões não ligados ao banco: ${inv.unlinkedSeedCards.join(", ")}. A estimativa deles NÃO entra; só o dado real dos cartões do banco.`]
+            : []),
+          ...(inv.seedNotFound.length ? [`Parcelas do plano ainda sem par no banco (entram como estimativa até casar): ${inv.seedNotFound.join(", ")}.`] : []),
+        ],
+        cartoes: inv.cards.map((c) => {
+          const acc = d.accounts.find((a) => a.id === c.accountId);
+          return {
+            cartao: c.name,
+            total: reais(c.total),
+            valor_real_do_banco: Boolean(c.real),
+            origem: c.accountId === "reserva" ? "reserva do teto (estimativa; some quando o mês fechar)" : c.accountId === "plano" ? "parcelas do plano sem par no banco (estimativa)" : c.real ? "fatura fechada do banco" : c.fromBank ? "compras reais do banco (fatura aberta)" : "estimativa (sem banco conectado)",
+            composicao: c.lines.map((l) => ({ item: l.label, valor: reais(l.cents) })),
+            limite_disponivel: acc?.available_limit_cents != null ? reais(acc.available_limit_cents) : null,
+            limite_total: acc?.credit_limit_cents != null ? reais(acc.credit_limit_cents) : null,
+            vencimento: acc?.bill_due_date ?? null,
+          };
+        }),
+      });
+    },
+  );
+
+  server.registerTool(
+    "parcelas",
+    {
+      title: "Compras parceladas",
+      description: "Compras parceladas (ativas e planejadas): valor da parcela, cartão, quantas faltam, mês em que terminam e o total comprometido nos próximos 12 meses.",
+      inputSchema: z.object({}),
+      annotations: READ_ONLY,
+    },
+    async (_args, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const month = monthOf(todayISO());
+      const names = new Map(d.accounts.map((a) => [a.id, a.name]));
+      const active = d.installments.filter((p) => p.status === "ativa" && !p.covered_by_bank);
+      const inputs = invoiceInputs(d);
+      const prep = prepareInvoices(inputs);
+      return json({
+        valores_em: "reais",
+        compras: d.installments
+          .filter((p) => p.status !== "quitada")
+          .map((p) => {
+            const paid = Math.max(0, Math.min(p.installments_count, monthsBetween(p.first_invoice_month, month)));
+            return {
+              nome: p.name,
+              status: p.status,
+              coberta_pelo_banco: p.covered_by_bank,
+              cartao: p.account_id ? (names.get(p.account_id) ?? null) : "não informado",
+              parcela: reais(p.installment_cents),
+              parcelas: p.installments_count,
+              restantes: p.installments_count - paid,
+              primeira_fatura: p.first_invoice_month.slice(0, 7),
+              ultima_fatura: installmentEndMonth(p).slice(0, 7),
+              observacao: p.notes,
+            };
+          }),
+        // mesma fonte das faturas: parcelas reais do banco (e calculadas); estimativa só sem banco conectado
+        proximos_12_meses: monthRange(month, addMonths(month, 11)).map((m) => {
+          const inv = invoicesForMonth({ ...inputs, month: m }, prep);
+          return { mes: m.slice(0, 7), parcelas_nos_cartoes: reais(installmentsFromInvoices(inv)), parcelas_do_plano_ativas: reais(active.reduce((s, p) => s + installmentAmountInMonth(p, m), 0)) };
+        }),
+      });
+    },
+  );
+
+  server.registerTool(
+    "contas",
+    {
+      title: "Contas e cartões",
+      description: "Contas e cartões cadastrados, com saldo, limite e datas de fechamento/vencimento quando vêm do banco (Pluggy).",
+      inputSchema: z.object({}),
+      annotations: READ_ONLY,
+    },
+    async (_args, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      return json({
+        valores_em: "reais",
+        contas: d.accounts.map((a) => ({
+          nome: a.name,
+          tipo: a.kind === "credit_card" ? "cartão" : "conta",
+          conectada_ao_banco: Boolean(a.pluggy_account_id),
+          saldo: a.balance_cents != null ? reais(a.balance_cents) : null,
+          limite_total: a.credit_limit_cents != null ? reais(a.credit_limit_cents) : null,
+          limite_disponivel: a.available_limit_cents != null ? reais(a.available_limit_cents) : null,
+          fechamento: a.bill_close_date,
+          vencimento: a.bill_due_date,
+          atualizado_em: a.synced_at,
+        })),
+      });
+    },
+  );
+}

@@ -1,0 +1,33 @@
+# Sincroniza os bancos (Pluggy) a cada 3 horas, chamando o endpoint de cron do painel.
+# O plano grátis da Vercel só deixa o cron dela rodar 1x por dia; este complementa.
+# Configure no repositório (Settings → Secrets and variables → Actions):
+#   - segredo  CRON_SECRET = o mesmo valor do CRON_SECRET da Vercel
+#   - variável APP_URL     = endereço do seu painel, ex.: https://meu-painel.vercel.app
+# Sem APP_URL, o job não faz nada (útil em forks).
+name: Sync dos bancos
+
+on:
+  schedule:
+    - cron: "15 */3 * * *" # a cada 3h, minuto 15 (o GitHub pode atrasar alguns minutos)
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  sync:
+    if: ${{ vars.APP_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Chamar /api/cron/sync
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          status=$(curl -sS -o resp.json -w '%{http_code}' --max-time 90 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "${APP_URL%/}/api/cron/sync")
+          echo "HTTP $status"
+          # só o resumo (contagens), nunca dados bancários
+          head -c 300 resp.json; echo
+          test "$status" = "200"
