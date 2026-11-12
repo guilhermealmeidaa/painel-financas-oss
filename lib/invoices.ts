@@ -1,11 +1,22 @@
 import { allocateBySequence, coveredSeedInstallments, synthesizeInstallments, txInvoiceMonth, type CardTx } from "./cards";
-import { addMonths, lastDayOfMonth } from "./dates";
+import { addMonths, lastDayOfMonth, monthsBetween } from "./dates";
 import { countsInDaily, dailySplit, installmentAmountInMonth, type BudgetLike, type InstallmentLike, type TransactionLike } from "./projection";
 import { subscriptionKey } from "./subscriptions";
 
+/** Item que compõe uma linha da fatura (para "abrir" o número: detalhe_fatura no MCP). */
+export interface InvoiceItem {
+  /** id da transação do banco; null para o que é calculado ou estimado */
+  id: string | null;
+  date: string | null;
+  description: string;
+  cents: number;
+  installment: string | null;
+  origin: "banco" | "calculada" | "projetada" | "plano" | "estimativa";
+}
 export interface InvoiceLine {
   label: string;
   cents: number;
+  items?: InvoiceItem[];
 }
 export interface CardInvoice {
   accountId: string | null;
@@ -106,12 +117,12 @@ export function prepareInvoices(p: Omit<InvoiceParams, "month">) {
   );
 
   // assinaturas no cartão: média dos 2 últimos débitos, projetada nos meses de fatura sem cobrança real
-  const subs = new Map<string, { account_id: string; key: string; charges: { month: string; cents: number; on: string }[] }>();
+  const subs = new Map<string, { account_id: string; key: string; charges: { month: string; cents: number; on: string; desc: string }[] }>();
   for (const t of withMonth) {
     if (t.bucket !== "assinatura" || t.occurred_on > today) continue;
     const key = `${t.account_id}|${subscriptionKey(t.description, t.auto_reason)}`;
     const s = subs.get(key) ?? { account_id: t.account_id!, key, charges: [] };
-    s.charges.push({ month: t.invoice_month, cents: t.amount_cents, on: t.occurred_on });
+    s.charges.push({ month: t.invoice_month, cents: t.amount_cents, on: t.occurred_on, desc: t.description });
     subs.set(key, s);
   }
   const subscriptions = [...subs.values()].map((s) => {
@@ -119,6 +130,7 @@ export function prepareInvoices(p: Omit<InvoiceParams, "month">) {
     return {
       account_id: s.account_id,
       key: s.key,
+      name: last2[0].desc,
       avg_cents: Math.round(last2.reduce((x, c) => x + c.cents, 0) / last2.length),
       lastMonth: s.charges.reduce((m, c) => (c.month > m ? c.month : m), s.charges[0].month),
     };
@@ -154,25 +166,42 @@ export function invoicesForMonth(
     }
     return byKey.get(id)!;
   };
-  const add = (id: string | null, label: string, cents: number) => {
+  const add = (id: string | null, label: string, cents: number, item?: Omit<InvoiceItem, "cents">) => {
     if (!cents) return;
     const inv = card(id && p.cards.some((c) => c.id === id) ? id : null);
-    const line = inv.lines.find((l) => l.label === label);
+    let line = inv.lines.find((l) => l.label === label);
     if (line) line.cents += cents;
-    else inv.lines.push({ label, cents });
+    else inv.lines.push((line = { label, cents, items: [] }));
+    if (item) (line.items ??= []).push({ ...item, cents });
     inv.total += cents;
   };
+  const nOf = (n?: number | null, total?: number | null) => (total && total > 1 ? `${n ?? "?"}/${total}` : null);
 
   // --- cartões ligados ao banco: dado real ---
   for (const c of p.cards.filter(isLinked)) {
     const bills = (p.realBills ?? []).filter((b) => b.account_id === c.id && b.due_date.startsWith(p.month.slice(0, 7)));
     const rows = prep.withMonth.filter((t) => t.account_id === c.id && t.invoice_month === p.month);
-    for (const t of rows) add(c.id, (t.total_installments ?? 0) > 1 ? "Parcelas" : "Compras", t.amount_cents);
+    for (const t of rows)
+      add(c.id, (t.total_installments ?? 0) > 1 ? "Parcelas" : "Compras", t.amount_cents, {
+        id: t.id,
+        date: t.occurred_on,
+        description: t.description,
+        installment: nOf(t.installment_number, t.total_installments),
+        origin: "banco",
+      });
     for (const v of prep.virtual) {
-      if (v.account_id === c.id && v.invoice_month === p.month) add(c.id, "Parcelas (calculadas)", v.amount_cents);
+      if (v.account_id === c.id && v.invoice_month === p.month)
+        add(c.id, "Parcelas (calculadas)", v.amount_cents, {
+          id: null,
+          date: null,
+          description: v.description,
+          installment: nOf(v.installment_number, v.total_installments),
+          origin: "calculada",
+        });
     }
     for (const s of prep.subscriptions) {
-      if (s.account_id === c.id && p.month > s.lastMonth) add(c.id, "Assinaturas (projetadas)", s.avg_cents);
+      if (s.account_id === c.id && p.month > s.lastMonth)
+        add(c.id, "Assinaturas (projetadas)", s.avg_cents, { id: null, date: null, description: s.name, installment: null, origin: "projetada" });
     }
     if (bills.length) {
       const inv = card(c.id);
@@ -180,7 +209,13 @@ export function invoicesForMonth(
       if (!rows.length) {
         // nenhuma compra ligada a essa fatura: usa o que a Pluggy informou
         const total = bills.reduce((s, b) => s + b.total_cents, 0);
-        inv.lines = [{ label: "Fatura fechada (valor informado pelo banco)", cents: total }];
+        inv.lines = [
+          {
+            label: "Fatura fechada (valor informado pelo banco)",
+            cents: total,
+            items: [{ id: null, date: bills[0].due_date, description: "Total informado pelo banco", cents: total, installment: null, origin: "banco" }],
+          },
+        ];
         inv.total = total;
       }
     }
@@ -215,9 +250,13 @@ export function invoicesForMonth(
       }
       const inv = byKey.get(target) ?? card(target);
       const label = `Parcelas do plano — ${i.name}`;
+      const k = monthsBetween(i.first_invoice_month, p.month) + 1;
+      const item: InvoiceItem = { id: null, date: null, description: i.name, cents, installment: `${k}/${i.installments_count}`, origin: "plano" };
       const line = inv.lines.find((l) => l.label === label);
-      if (line) line.cents += cents;
-      else inv.lines.push({ label, cents });
+      if (line) {
+        line.cents += cents;
+        (line.items ??= []).push(item);
+      } else inv.lines.push({ label, cents, items: [item] });
       inv.total += cents;
       continue;
     }
@@ -244,7 +283,13 @@ export function invoicesForMonth(
       name: "Reserva do teto (estimativa)",
       total: reserved,
       estimate: true,
-      lines: [{ label: "Teto do dia a dia no crédito menos o já gasto; some quando o mês fechar", cents: reserved }],
+      lines: [
+        {
+          label: "Teto do dia a dia no crédito menos o já gasto; some quando o mês fechar",
+          cents: reserved,
+          items: [{ id: null, date: null, description: "Reserva do teto do dia a dia no crédito", cents: reserved, installment: null, origin: "estimativa" }],
+        },
+      ],
     });
   }
 

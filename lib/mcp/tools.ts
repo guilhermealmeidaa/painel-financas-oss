@@ -10,6 +10,7 @@ import { METHOD_LABEL, bucketLabels } from "@/lib/labels";
 import { countsInDaily, installmentAmountInMonth, installmentEndMonth } from "@/lib/projection";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { findDuplicates } from "@/lib/duplicates";
+import { dailyDetail, healthReport, invoiceDetail } from "@/lib/mcp/views";
 
 /**
  * Ferramentas SOMENTE LEITURA para o Claude responder perguntas sobre as finanças.
@@ -24,19 +25,60 @@ const MONTH = z
 
 type Ctx = { http?: { authInfo?: { extra?: Record<string, unknown> } } };
 
-async function dataFor(ctx: Ctx): Promise<AllData> {
+function userOf(ctx: Ctx) {
   const userId = ctx.http?.authInfo?.extra?.userId;
   if (typeof userId !== "string") throw new Error("não autorizado");
   const admin = createAdminClient();
   if (!admin) throw new Error("servidor sem SUPABASE_SERVICE_ROLE_KEY");
+  return { userId, admin };
+}
+
+async function dataFor(ctx: Ctx): Promise<AllData> {
+  const { userId, admin } = userOf(ctx);
   return loadAllFor(admin, userId);
 }
 
-const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
+/** Versão no ar: commit (Vercel) + data do build. */
+export function versao() {
+  const sha = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local";
+  return `${sha} (${(process.env.BUILD_TIME ?? "").slice(0, 16).replace("T", " ") || "dev"} UTC)`;
+}
+/** Agora em São Paulo, AAAA-MM-DDTHH:mm:ss-03:00. */
+function geradoEm() {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Sao_Paulo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    })
+      .formatToParts(new Date())
+      .map((x) => [x.type, x.value]),
+  );
+  return `${p.year}-${p.month}-${p.day}T${p.hour === "24" ? "00" : p.hour}:${p.minute}:${p.second}-03:00`;
+}
+const json = (value: unknown) => ({
+  content: [
+    {
+      type: "text" as const,
+      text: JSON.stringify(
+        value && typeof value === "object" && !Array.isArray(value) ? { gerado_em: geradoEm(), versao: versao(), ...value } : value,
+        null,
+        2,
+      ),
+    },
+  ],
+});
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const toMonth = (m?: string) => (m ? `${m}-01` : monthOf(todayISO()));
 
 export function registerFinanceTools(server: McpServer) {
+  registerDiagnosticTools(server);
+
   server.registerTool(
     "resumo_do_mes",
     {
@@ -389,6 +431,131 @@ export function registerFinanceTools(server: McpServer) {
           vencimento: a.bill_due_date,
           atualizado_em: a.synced_at,
         })),
+      });
+    },
+  );
+}
+
+// ================= Fase 1: diagnóstico e transparência =================
+
+function registerDiagnosticTools(server: McpServer) {
+  server.registerTool(
+    "saude",
+    {
+      title: "Saúde dos dados",
+      description:
+        "Diagnóstico do painel: versão no ar, último sync de cada conta (ok/erro/atrasado), gastos sem categoria, " +
+        "parcelas do plano sem par no banco, lançamentos manuais sem a transação do banco e faturas já pagas cujo valor " +
+        "reconstruído não bate com o pago. USE PRIMEIRO quando um número parecer estranho ou antes de uma análise longa.",
+      inputSchema: z.object({}),
+      annotations: READ_ONLY,
+    },
+    async (_args, ctx) => {
+      const { userId, admin } = userOf(ctx as Ctx);
+      const [d, { data: items }] = await Promise.all([
+        loadAllFor(admin, userId),
+        admin.from("pluggy_items").select("item_id, connector_name, status, last_synced_at").eq("user_id", userId),
+      ]);
+      const today = todayISO();
+      const inputs = invoiceInputs(d);
+      const prep = prepareInvoices(inputs);
+      const since = addMonths(monthOf(today), -3);
+      const paidBills = d.cardBills
+        .filter((b) => b.status === "paga" && (b.paid_cents ?? 0) > 0 && b.due_date >= since)
+        .map((b) => {
+          const month = monthOf(b.due_date);
+          const card = invoicesForMonth({ ...inputs, month }, prep).cards.find((c) => c.accountId === b.account_id);
+          const reconstructed = (card?.lines ?? [])
+            .flatMap((l) => l.items ?? [])
+            .filter((i) => i.origin === "banco" && i.id)
+            .reduce((s, i) => s + i.cents, 0);
+          return { account_id: b.account_id, due_date: b.due_date, paid_cents: b.paid_cents ?? 0, reconstructed_cents: reconstructed };
+        });
+      return json({
+        hoje: today,
+        valores_em: "reais",
+        ...healthReport({
+          now: new Date(),
+          today,
+          accounts: d.accounts,
+          items: items ?? [],
+          transactions: d.transactions,
+          installments: d.installments,
+          coveredInstallmentIds: new Set(prep.covered.keys()),
+          paidBills,
+        }),
+      });
+    },
+  );
+
+  server.registerTool(
+    "detalhe_fatura",
+    {
+      title: "Detalhe da fatura de um cartão",
+      description:
+        "Abre a fatura de UM cartão num mês de vencimento: para cada linha da composição (Compras, Parcelas, Parcelas calculadas, " +
+        "Assinaturas projetadas, Parcelas do plano, Reserva do teto) lista os itens com id, data, descrição, valor, parcela n/total e " +
+        "origem (banco/calculada/projetada/plano/estimativa). Os itens somam exatamente a linha. Traz também o valor que o banco " +
+        "informou, se a fatura está paga e os ids dos pagamentos casados. Use quando perguntarem 'de onde vem esse valor?'.",
+      inputSchema: z.object({
+        cartao: z.string().min(1).describe("Nome (ou parte do nome) do cartão, ex.: Nubank, Inter, Santander"),
+        mes: MONTH.optional(),
+      }),
+      annotations: READ_ONLY,
+    },
+    async ({ cartao, mes }, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const month = toMonth(mes);
+      const inputs = invoiceInputs(d);
+      const inv = invoicesForMonth({ ...inputs, month });
+      const q = cartao.trim().toLowerCase();
+      const card = inv.cards.find((c) => c.name.trim().toLowerCase() === q) ?? inv.cards.find((c) => c.name.toLowerCase().includes(q));
+      if (!card) {
+        return json({ mes_de_vencimento: month.slice(0, 7), erro: `Nenhuma fatura de "${cartao}" neste mês.`, cartoes_com_fatura: inv.cards.map((c) => c.name) });
+      }
+      const bills = d.cardBills.filter((b) => b.account_id === card.accountId && b.due_date.startsWith(month.slice(0, 7)));
+      const { bills: due } = billsForMonth({ ...inputs, month, payments: d.payments });
+      const key = `card:${card.accountId ?? "none"}`;
+      const paymentIds = [
+        ...bills.map((b) => b.payment_tx_id).filter((x): x is string => Boolean(x)),
+        ...d.payments.filter((p) => p.month === month && p.key === key && p.transaction_id).map((p) => p.transaction_id!),
+      ];
+      return json({
+        mes_de_vencimento: month.slice(0, 7),
+        valores_em: "reais",
+        ...invoiceDetail(card, { bills, paid: due.find((b) => b.key === key)?.paid ?? false, paymentIds: [...new Set(paymentIds)] }),
+      });
+    },
+  );
+
+  server.registerTool(
+    "detalhe_dia_a_dia",
+    {
+      title: "Detalhe do dia a dia",
+      description:
+        "Lista TODAS as transações que entram no gasto do dia a dia (lazer/mercado) do mês, com id, data, descrição, valor, conta, " +
+        "meio e origem, e o total por bucket. O total é exatamente o 'gasto' do resumo_do_mes. Use para explicar o 'ainda posso gastar' " +
+        "ou achar um gasto que não deveria contar.",
+      inputSchema: z.object({ mes: MONTH.optional() }),
+      annotations: READ_ONLY,
+    },
+    async ({ mes }, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const month = toMonth(mes);
+      const names = new Map(d.accounts.map((a) => [a.id, a.name]));
+      const budget = d.budgets.find((b) => b.month === month) ?? null;
+      return json({
+        valores_em: "reais",
+        ...dailyDetail(
+          {
+            month,
+            today: todayISO(),
+            budget,
+            transactions: d.transactions,
+            accountName: (id) => (id ? (names.get(id) ?? null) : null),
+          },
+          bucketLabels(d.settings),
+        ),
       });
     },
   );

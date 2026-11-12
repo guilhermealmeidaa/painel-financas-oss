@@ -56,7 +56,7 @@ export async function loadAllFor(supabase: SupabaseClient<Database>, userId: str
       .order("created_at", { ascending: false }),
     // marcações de pago; as que você desfez (dismissed) vêm separadas e não contam
     supabase.from("bill_payments").select("month, key, transaction_id, dismissed").eq("user_id", userId),
-    supabase.from("card_bills").select("account_id, due_date, total_cents, pluggy_bill_id, closing_date, status").eq("user_id", userId),
+    supabase.from("card_bills").select("account_id, due_date, total_cents, pluggy_bill_id, closing_date, status, paid_cents, payment_tx_id").eq("user_id", userId),
   ]);
   for (const r of [settings, accounts, incomes, fixed, installments, budgets, allocations, transactions, payments, cardBills]) {
     if (r.error) throw new Error(`Falha ao carregar dados: ${r.error.message}`);

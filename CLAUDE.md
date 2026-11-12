@@ -60,7 +60,8 @@ Módulos de `lib/` que mais importam:
 | `labels.ts` | Rótulos; `bucketLabels(settings)` aplica os nomes que o usuário deu ao lazer/mercado. |
 | `onboarding.ts` / `setup-status.ts` | Etapas da configuração e quais variáveis de ambiente faltam (só booleanos). |
 | `demo-data.ts` / `demo-flag.ts` | Modo demonstração. |
-| `mcp/tools.ts` | Ferramentas do MCP somente leitura (`resumo_do_mes`, `projecao`, `transacoes`, `faturas`, `parcelas`, `contas`, `possiveis_duplicatas`). |
+| `mcp/tools.ts` | Ferramentas do MCP somente leitura (`resumo_do_mes`, `projecao`, `transacoes`, `faturas`, `parcelas`, `contas`, `possiveis_duplicatas`, e o diagnóstico `saude`, `detalhe_fatura`, `detalhe_dia_a_dia`). Toda resposta traz `gerado_em` e `versao`. |
+| `mcp/views.ts` | Montagem das respostas de diagnóstico (puro e testado). Nada é recalculado aqui: os detalhes saem das mesmas funções que geram os totais (`invoicesForMonth`, `dailyTransactions`, `monthStatus`), por isso batem centavo a centavo. |
 
 ## Conceitos do domínio
 

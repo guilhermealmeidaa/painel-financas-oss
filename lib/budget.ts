@@ -36,6 +36,14 @@ export function remainingWeekends(today: string, skipped: string[] = []): string
   return out;
 }
 
+/**
+ * Transações que entram no gasto do dia a dia do mês: a MESMA lista que o monthStatus soma.
+ * O detalhe (MCP detalhe_dia_a_dia, tela) usa esta função para bater centavo a centavo com o resumo.
+ */
+export function dailyTransactions<T extends TransactionLike>(transactions: T[], ctx: { month: string; today: string; controlStart?: string | null }): T[] {
+  return transactions.filter((t) => countsInDaily(t, { month: ctx.month, controlStart: ctx.controlStart, today: ctx.today }));
+}
+
 export function monthStatus(params: {
   today: string;
   capCents: number;
@@ -49,7 +57,7 @@ export function monthStatus(params: {
 }): MonthStatus {
   const month = params.month ?? monthOf(params.today);
   // mesma regra da projeção e do MCP: lazer/mercado do início do controle até hoje
-  const txs = params.transactions.filter((t) => countsInDaily(t, { month, controlStart: params.controlStart, today: params.today }));
+  const txs = dailyTransactions(params.transactions, { month, controlStart: params.controlStart, today: params.today });
   const spent = txs.reduce((s, t) => s + t.amount_cents, 0);
   const buckets = params.allocations.map((a) => {
     const bSpent = txs.filter((t) => t.bucket === a.bucket).reduce((s, t) => s + t.amount_cents, 0);
