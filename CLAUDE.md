@@ -81,6 +81,16 @@ Módulos de `lib/` que mais importam:
 6. **MCP é somente leitura.**
 7. Lógica de dinheiro nova vai para `lib/` como função pura **com teste**.
 
+## Adaptar às necessidades de cada pessoa
+
+O projeto foi feito para ser **personalizado**. Cada pessoa organiza o dinheiro de um jeito, e é esperado que ela peça mudanças grandes: novas categorias, metas, divisão de contas com outra pessoa, telas novas, remover o que não usa. Ao receber um pedido assim:
+
+- **Apoie e proponha.** Entenda a necessidade real (pergunte como a pessoa organiza o dinheiro hoje) e sugira o jeito mais simples de encaixar no painel. Não trate o desenho atual como intocável.
+- **Reaproveite a base**: categorias novas entram no enum `bucket` (com migração aditiva e rótulo em `lib/labels.ts`); regras de dinheiro em `lib/` como função pura com teste; telas com `Panel`, `Money` e o utilitário `surface`.
+- **Mantenha as regras que não se quebram** (seção acima): segredos no servidor, RLS, nada de dados bancários em log, decisões automáticas reversíveis. Personalizar nunca justifica abrir mão delas.
+- **Explique o efeito nos números**: se a mudança altera o dia a dia, as faturas ou a projeção, diga o que muda e confira com dados reais ou com o `npm run demo`.
+- Melhoria que serve para qualquer pessoa (bug, banco novo, tela mais clara): sugira abrir um pull request no repositório original.
+
 ## Onboarding: ajudando alguém a instalar
 
 O caminho que o próprio app mostra (`/configurar` antes do Supabase, depois `/primeiros-passos`):

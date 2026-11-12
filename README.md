@@ -73,6 +73,19 @@ Abra http://localhost:3000. Se faltar alguma chave do Supabase, o painel mostra 
 | **Conexões** | Conectar bancos, ligar cartões do banco aos seus e sincronizar agora |
 | **Acesso do Claude** | Token para um servidor MCP somente leitura (veja [`docs/mcp.md`](docs/mcp.md)) |
 
+## Faça do seu jeito
+
+Este painel nasceu das necessidades de uma pessoa, e a ideia é que **cada um adapte o seu** às próprias finanças. Faça um fork e mude sem medo:
+
+- **Suas categorias**: além de renomear Lazer e Mercado nas Preferências, dá para criar outras, mudar como o dia a dia é dividido ou trocar o teto por metas por categoria.
+- **Seu jeito de planejar**: metas de reserva, divisão de contas com outra pessoa, envelopes, alertas — o que fizer sentido para a sua vida.
+- **Seus bancos e cartões**: adicione bancos em [`lib/banks.ts`](lib/banks.ts), crie regras de classificação e ajuste o que o painel decide sozinho.
+- **Suas telas**: tire o que você não usa e crie as que fazem falta.
+
+Não precisa saber programar tudo sozinho: abra a pasta no [Claude Code](https://claude.com/claude-code) e descreva o que você quer (*"quero separar os gastos com pets"*, *"quero uma meta de reserva de emergência"*). O [`CLAUDE.md`](CLAUDE.md) explica o projeto para ele e as regras de segurança que devem ser mantidas.
+
+Melhorou algo que serve para todo mundo? Abra um pull request. Personalizações só suas ficam ótimas no seu fork.
+
 ## Instalando com a ajuda do Claude
 
 O repositório traz um [`CLAUDE.md`](CLAUDE.md) que explica o projeto (arquitetura, regras de negócio e de segurança) e o roteiro de instalação. Abra a pasta no [Claude Code](https://claude.com/claude-code) e peça: *"me ajude a instalar o painel"*.
