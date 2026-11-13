@@ -155,6 +155,8 @@ async function syncItem(db: DB, userId: string, itemId: string): Promise<ItemSum
     }
     const fields = {
       pluggy_account_id: acc.id,
+      // nome como a Pluggy manda (ex.: "GOLD", "PLATINUM"): apelido para buscas, mesmo depois de renomear
+      pluggy_name: (acc.marketingName || acc.name || "").trim().slice(0, 80) || null,
       pluggy_item_id: itemId,
       balance_cents: Math.round(acc.balance * 100),
       credit_limit_cents: acc.creditData?.creditLimit != null ? toCents(acc.creditData.creditLimit) : null,

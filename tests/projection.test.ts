@@ -143,3 +143,69 @@ describe("itens 6 e 7: uma regra só para o dia a dia", () => {
     expect(status.weekends).toEqual([]);
   });
 });
+
+describe("ritmo por fim de semana", () => {
+  it("mês futuro: todos os sábados do mês; ritmo = teto ÷ quantidade, por bucket = orçado ÷ quantidade", async () => {
+    const { monthWeekends, budgetStatus } = await import("@/lib/budget");
+    expect(monthWeekends("2026-12-01")).toEqual(["2026-12-05", "2026-12-12", "2026-12-19", "2026-12-26"]);
+    const st = budgetStatus(
+      { month: "2026-12-01", cap_cents: 200000, control_start: null, skipped_weekends: [], allocations: [{ bucket: "lazer", amount_cents: 120000 }, { bucket: "mercado", amount_cents: 80000 }] },
+      [],
+      "2026-11-13",
+    );
+    expect(st.weekends).toEqual(["2026-12-05", "2026-12-12", "2026-12-19", "2026-12-26"]);
+    expect(st.perWeekend).toEqual({ total: 50000, byBucket: { lazer: 30000, mercado: 20000 } });
+    expect(st.buckets.map((b) => b.spent)).toEqual([0, 0]);
+  });
+
+  it("mês atual: sábados que faltam menos os 'sem gasto' (nov/26 com 21/11 sem gasto = 14 e 28)", async () => {
+    const { countingWeekends, budgetStatus } = await import("@/lib/budget");
+    expect(countingWeekends("2026-11-01", "2026-11-13", ["2026-11-21"])).toEqual(["2026-11-14", "2026-11-28"]);
+    // domingo ainda conta o sábado de ontem
+    expect(countingWeekends("2026-11-01", "2026-11-29", [])).toEqual(["2026-11-28"]);
+    const st = budgetStatus({ month: "2026-11-01", cap_cents: 150000, control_start: "2026-11-05", skipped_weekends: ["2026-11-21"], allocations: [] }, [], "2026-11-13");
+    expect(st.perWeekend?.total).toBe(75000);
+  });
+
+  it("mês passado: sem ritmo", async () => {
+    const { budgetStatus } = await import("@/lib/budget");
+    expect(budgetStatus({ month: "2026-10-01", cap_cents: 150000, control_start: null, skipped_weekends: [], allocations: [] }, [], "2026-11-13").perWeekend).toBeNull();
+  });
+});
+
+describe("períodos especiais (viagem com teto próprio)", () => {
+  const tx = (on: string, reais: number, bucket = "lazer") => ({ occurred_on: on, amount_cents: reais * 100, bucket, method: "pix", account_id: null, superseded: false, is_inflow: false, source: "manual" }) as never;
+  const dez = (txs: never[], today = "2026-11-13") =>
+    import("@/lib/budget").then(({ budgetStatus }) =>
+      budgetStatus(
+        {
+          month: "2026-12-01",
+          cap_cents: 200000,
+          control_start: null,
+          skipped_weekends: [],
+          allocations: [{ bucket: "lazer", amount_cents: 120000 }, { bucket: "mercado", amount_cents: 80000 }],
+          periods: [{ name: "Viagem", start_date: "2026-12-18", end_date: "2026-12-23", cap_cents: 80000 }],
+        },
+        txs,
+        today,
+      ),
+    );
+
+  it("teto da viagem sai do teto do mês; fins de semana da viagem saem do ritmo", async () => {
+    const st = await dez([]);
+    expect(st.weekends).toEqual(["2026-12-05", "2026-12-12", "2026-12-26"]);
+    expect(st.normalRemaining).toBe(120000);
+    expect(st.perWeekend?.total).toBe(40000);
+    // lazer 1.200 − 60% de 800 = 720 ÷ 3; mercado 800 − 40% de 800 = 480 ÷ 3
+    expect(st.perWeekend?.byBucket).toEqual({ lazer: 24000, mercado: 16000 });
+    expect(st.remaining).toBe(200000);
+  });
+
+  it("gasto na viagem conta nela; o que passa do teto dela sai do normal", async () => {
+    const st = await dez([tx("2026-12-05", 100), tx("2026-12-19", 900)], "2026-12-20");
+    expect(st.periods[0]).toMatchObject({ spent: 90000, remaining: -10000 });
+    // 2.000 − 800 (viagem) − 100 (fora) − 100 (estouro) = 1.000
+    expect(st.normalRemaining).toBe(100000);
+    expect(st.remaining).toBe(100000);
+  });
+});

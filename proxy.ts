@@ -2,8 +2,15 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { DEMO_PAGES } from "@/lib/demo-flag";
 
-// Fora do login por sessão: /login; /api/cron (valida CRON_SECRET); /api/mcp (exige token de API pf_…).
-const PUBLIC_PATHS = ["/login", "/api/cron", "/api/mcp"];
+// Fora do login por sessão: /login; /api/cron (valida CRON_SECRET); /api/mcp (exige token pf_… ou OAuth);
+// descoberta e endpoints públicos do OAuth (registro, token, revogação). O /oauth/authorize exige login.
+const PUBLIC_PATHS = ["/login", "/api/cron", "/api/mcp", "/.well-known", "/oauth/register", "/oauth/token", "/oauth/revoke"];
+
+/** Caminho interno seguro para voltar depois do login (nunca outro site). */
+function safeNext(next: string | null): string | null {
+  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\") || next.startsWith("/login")) return null;
+  return next;
+}
 
 export async function proxy(request: NextRequest) {
   // modo demonstração (só em dev, dados inventados): não exige login nem fala com o Supabase
@@ -64,12 +71,16 @@ export async function proxy(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.search = "";
+    // volta para onde estava (ex.: /oauth/authorize com todos os parâmetros) depois do login
+    if (request.method === "GET" && pathname !== "/") url.searchParams.set("next", pathname + request.nextUrl.search);
     return NextResponse.redirect(url);
   }
   if (isLoggedIn && pathname === "/login") {
     const url = request.nextUrl.clone();
+    const next = safeNext(request.nextUrl.searchParams.get("next"));
+    url.search = "";
     url.pathname = "/";
-    return NextResponse.redirect(url);
+    return NextResponse.redirect(next ? new URL(next, request.nextUrl.origin) : url);
   }
   return response;
 }

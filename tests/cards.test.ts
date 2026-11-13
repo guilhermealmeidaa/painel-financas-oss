@@ -61,18 +61,18 @@ describe("regra 6: parcelas futuras", () => {
 
 describe("regra 4: fatura paga", () => {
   it("pagamento(s) no cartão entre fechamento e vencimento cobrem a fatura", () => {
-    const bill = { total_cents: 149506, due_date: "2026-11-05", closing_date: "2026-10-27" };
-    expect(billPayment(bill, [{ id: "p", occurred_on: "2026-11-05", amount_cents: 149506 }])).toMatchObject({ paid: true, payment_tx_id: "p" });
+    const bill = { total_cents: 150000, due_date: "2026-11-05", closing_date: "2026-10-27" };
+    expect(billPayment(bill, [{ id: "p", occurred_on: "2026-11-05", amount_cents: 150000 }])).toMatchObject({ paid: true, payment_tx_id: "p" });
     expect(billPayment(bill, [{ id: "p", occurred_on: "2026-11-05", amount_cents: 100000 }]).paid).toBe(false);
     // pagamento em duas vezes também vale
     expect(
       billPayment(bill, [
         { id: "p1", occurred_on: "2026-10-30", amount_cents: 50000 },
-        { id: "p2", occurred_on: "2026-11-04", amount_cents: 99506 },
+        { id: "p2", occurred_on: "2026-11-04", amount_cents: 100000 },
       ]).paid,
     ).toBe(true);
     // pagamento de outro ciclo não conta
-    expect(billPayment(bill, [{ id: "x", occurred_on: "2026-10-01", amount_cents: 149506 }]).paid).toBe(false);
+    expect(billPayment(bill, [{ id: "x", occurred_on: "2026-10-01", amount_cents: 150000 }]).paid).toBe(false);
   });
 });
 

@@ -2,19 +2,25 @@ import "server-only";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { billsForMonth } from "@/lib/bills";
-import { monthStatus } from "@/lib/budget";
-import { invoiceInputs, loadAllFor, runProjection, type AllData } from "@/lib/data";
-import { addMonths, monthOf, monthRange, monthsBetween, todayISO } from "@/lib/dates";
+import { budgetStatus } from "@/lib/budget";
+import { bankBalance, invoiceInputs, loadAllFor, runProjection, type AllData } from "@/lib/data";
+import { addDays, addMonths, monthOf, monthRange, monthsBetween, todayISO } from "@/lib/dates";
 import { installmentsFromInvoices, invoicesForMonth, prepareInvoices } from "@/lib/invoices";
 import { METHOD_LABEL, bucketLabels } from "@/lib/labels";
 import { countsInDaily, installmentAmountInMonth, installmentEndMonth } from "@/lib/projection";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { findDuplicates } from "@/lib/duplicates";
 import { dailyDetail, healthReport, invoiceDetail } from "@/lib/mcp/views";
+import { billCyclePayments } from "@/lib/cards";
+import { AUTO_DEBIT, dayInMonth, decodeCursor, encodeCursor, incomesReport, likelyDay, matches, subscriptionStats, upcomingDue, type DueItem } from "@/lib/mcp/phase2";
+import { simulatePurchase } from "@/lib/simulate";
+import { pendingIncomes } from "@/lib/anchor";
+import { buildGasto, remainingFor, scopesOf } from "@/lib/mcp/write";
 
 /**
- * Ferramentas SOMENTE LEITURA para o Claude responder perguntas sobre as finanças.
- * Nenhuma ferramenta escreve no banco. Valores em reais (número com 2 casas).
+ * Ferramentas para o Claude responder perguntas sobre as finanças. Todas são SOMENTE LEITURA, exceto
+ * lancar_gasto (exige token com escopo "write"), que só CRIA um lançamento manual: nunca edita nem apaga.
+ * Valores em reais (número com 2 casas).
  */
 
 const reais = (cents: number) => Math.round(cents) / 100;
@@ -74,10 +80,23 @@ const json = (value: unknown) => ({
   ],
 });
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+/**
+ * Cartão pelo nome que você deu OU pelo nome original da Pluggy (ex.: "GOLD" → "Cartão do dia a dia").
+ * Igualdade exata primeiro, depois "contém".
+ */
+function matchCardId(accounts: { id: string; name: string; pluggy_name?: string | null }[], query: string): string | null {
+  const q = query.trim().toLowerCase();
+  const names = (a: (typeof accounts)[number]) => [a.name, a.pluggy_name ?? ""].map((n) => n.trim().toLowerCase()).filter(Boolean);
+  return (accounts.find((a) => names(a).includes(q)) ?? accounts.find((a) => names(a).some((n) => n.includes(q))))?.id ?? null;
+}
+
+const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "use AAAA-MM-DD");
 const toMonth = (m?: string) => (m ? `${m}-01` : monthOf(todayISO()));
 
 export function registerFinanceTools(server: McpServer) {
   registerDiagnosticTools(server);
+  registerDailyTools(server);
+  registerWriteTools(server);
 
   server.registerTool(
     "resumo_do_mes",
@@ -97,17 +116,7 @@ export function registerFinanceTools(server: McpServer) {
       const rows = runProjection(d);
       const row = rows.find((r) => r.month === month);
       const budget = d.budgets.find((b) => b.month === month);
-      const status = budget
-        ? monthStatus({
-            today,
-            month,
-            controlStart: budget.control_start,
-            capCents: budget.cap_cents,
-            allocations: budget.allocations,
-            transactions: d.transactions,
-            skippedWeekends: budget.skipped_weekends,
-          })
-        : null;
+      const status = budget ? budgetStatus(budget, d.transactions, today) : null;
       const { bills, total, paidTotal } = billsForMonth({ ...invoiceInputs(d), month, payments: d.payments });
       const pending = d.transactions.filter((t) => monthOf(t.occurred_on) === month && t.bucket === "sem_categoria");
       return json({
@@ -147,8 +156,28 @@ export function registerFinanceTools(server: McpServer) {
                 gasto: reais(b.spent),
                 sobra: reais(b.remaining),
               })),
+              ...(status.periods.length
+                ? {
+                    periodos_especiais: status.periods.map((p) => ({
+                      nome: p.name,
+                      de: p.start,
+                      ate: p.end,
+                      teto: reais(p.cap),
+                      gasto: reais(p.spent),
+                      sobra: reais(p.remaining),
+                    })),
+                    fora_dos_periodos: {
+                      ainda_posso_gastar: reais(status.normalRemaining),
+                      regra: "teto do mês − tetos dos períodos − gasto fora deles − o que os períodos estouraram; os fins de semana dos períodos não entram no ritmo",
+                    },
+                  }
+                : {}),
               fins_de_semana_restantes: status.weekends,
+              ...(budget!.skipped_weekends.length ? { fins_de_semana_sem_gasto: budget!.skipped_weekends } : {}),
               por_fim_de_semana: status.perWeekend ? reais(status.perWeekend.total) : null,
+              ...(status.perWeekend
+                ? { por_fim_de_semana_por_bucket: Object.fromEntries(Object.entries(status.perWeekend.byBucket).map(([k, v]) => [bucketLabels(d.settings)[k as keyof ReturnType<typeof bucketLabels>], reais(v ?? 0)])) }
+                : {}),
             }
           : "sem orçamento cadastrado para o mês",
         sem_categoria_fora_da_conta: {
@@ -207,33 +236,54 @@ export function registerFinanceTools(server: McpServer) {
     {
       title: "Transações",
       description:
-        "Lista gastos e lançamentos (manuais e do banco via Pluggy), do mais recente para o mais antigo. " +
-        "Filtra por período, bucket e texto da descrição.",
+        "Lista gastos e lançamentos (manuais e do banco), do mais recente para o mais antigo, com paginação (cursor). " +
+        "Filtros: período, bucket, texto, conta, origem (manual/pluggy), valor mínimo/máximo, status do banco e parcelas futuras. " +
+        "Cada item traz motivo_auto (o que o painel decidiu sozinho) e juntado_com (ids ligados). Use para conferir gastos item a item.",
       inputSchema: z.object({
-        de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Data inicial AAAA-MM-DD"),
-        ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Data final AAAA-MM-DD"),
+        de: DATE.optional().describe("Data inicial AAAA-MM-DD"),
+        ate: DATE.optional().describe("Data final AAAA-MM-DD"),
         bucket: z.enum(["lazer", "mercado", "fixo", "assinatura", "parcela", "ignorar", "sem_categoria"]).optional(),
-        busca: z.string().max(60).optional().describe("Trecho da descrição (sem diferenciar maiúsculas)"),
-        limite: z.number().int().min(1).max(300).optional().describe("Máximo de itens (padrão 100)"),
-        incluir_futuras: z.boolean().optional().describe("Incluir parcelas com data futura (padrão: não; a lista vai só até hoje)"),
+        busca: z.string().max(60).optional().describe("Trecho da descrição (sem acento e sem diferenciar maiúsculas)"),
+        conta: z.string().max(60).optional().describe("Conta ou cartão (nome ou parte do nome)"),
+        origem: z.enum(["manual", "pluggy"]).optional().describe("manual = lançado por você; pluggy = veio do banco"),
+        valor_min: z.number().min(0).optional().describe("Valor mínimo em reais"),
+        valor_max: z.number().min(0).optional().describe("Valor máximo em reais"),
+        status: z.enum(["PENDING", "POSTED"]).optional().describe("Status no banco"),
+        incluir_futuras: z.boolean().optional().describe("Incluir lançamentos com data depois de hoje, como parcelas futuras (padrão: não)"),
+        limite: z.number().int().min(1).max(300).optional().describe("Itens por página (padrão 100, máximo 300)"),
+        cursor: z.string().max(40).optional().describe("Valor de proximo_cursor da página anterior"),
       }),
       annotations: READ_ONLY,
     },
-    async ({ de, ate, bucket, busca, limite, incluir_futuras }, ctx) => {
+    async ({ de, ate, bucket, busca, conta, origem, valor_min, valor_max, status, incluir_futuras, limite, cursor }, ctx) => {
       const d = await dataFor(ctx as Ctx);
       const names = new Map(d.accounts.map((a) => [a.id, a.name.trim()]));
       const hoje = todayISO();
-      const q = busca?.toLowerCase();
+      const contaIds = conta ? new Set(d.accounts.filter((a) => matches(a.name, conta)).map((a) => a.id)) : null;
+      const min = valor_min != null ? Math.round(valor_min * 100) : null;
+      const max = valor_max != null ? Math.round(valor_max * 100) : null;
       const list = d.transactions.filter(
         (t) =>
           (!de || t.occurred_on >= de) &&
           (!ate || t.occurred_on <= ate) &&
           (incluir_futuras || t.occurred_on <= hoje) &&
           (!bucket || t.bucket === bucket) &&
-          (!q || t.description.toLowerCase().includes(q)),
+          matches(t.description, busca) &&
+          (!contaIds || (t.account_id != null && contaIds.has(t.account_id))) &&
+          (!origem || t.source === origem) &&
+          (min == null || t.amount_cents >= min) &&
+          (max == null || t.amount_cents <= max) &&
+          (!status || t.pluggy_status === status),
       );
-      const shown = list.slice(0, limite ?? 100);
-      // mesma regra do resumo_do_mes para dizer o que entra no dia a dia
+      const pageSize = limite ?? 100;
+      const offset = decodeCursor(cursor);
+      const shown = list.slice(offset, offset + pageSize);
+      const next = offset + pageSize < list.length ? encodeCursor(offset + pageSize) : null;
+      // ligações: banco → manual (manual_id) e manual → bancos que apontam para ele; Pix no crédito/pagamentos (linked_tx_id)
+      const byManual = new Map<string, string[]>();
+      for (const t of d.transactions) if (t.manual_id) byManual.set(t.manual_id, [...(byManual.get(t.manual_id) ?? []), t.id]);
+      const linkedTo = new Map<string, string[]>();
+      for (const t of d.transactions) if (t.linked_tx_id) linkedTo.set(t.linked_tx_id, [...(linkedTo.get(t.linked_tx_id) ?? []), t.id]);
       const counts = (t: (typeof list)[number]) => {
         const m = monthOf(t.occurred_on);
         const b = d.budgets.find((x) => x.month === m);
@@ -242,25 +292,31 @@ export function registerFinanceTools(server: McpServer) {
       return json({
         valores_em: "reais",
         total_encontrado: list.length,
+        pagina: { inicio: offset, itens: shown.length, proximo_cursor: next },
         soma: reais(list.filter((t) => !t.is_inflow).reduce((s, t) => s + t.amount_cents, 0)),
         soma_que_conta_no_dia_a_dia: reais(list.filter(counts).reduce((s, t) => s + t.amount_cents, 0)),
-        itens: shown.map((t) => ({
-          id: t.id,
-          data: t.occurred_on,
-          descricao: t.description,
-          valor: reais(t.amount_cents),
-          entrada: t.is_inflow,
-          meio: METHOD_LABEL[t.method],
-          bucket: bucketLabels(d.settings)[t.bucket],
-          conta: t.account_id ? (names.get(t.account_id) ?? null) : null,
-          parcela: t.total_installments ? `${t.installment_number ?? "?"}/${t.total_installments}` : null,
-          // origem "manual" + do_banco=true: lançamento seu já juntado com a compra do banco (conta 1 vez)
-          origem: t.source,
-          do_banco: Boolean(t.external_id),
-          status: t.pluggy_status,
-          conta_no_dia_a_dia: counts(t),
-          criado_em: t.created_at,
-        })),
+        itens: shown.map((t) => {
+          const juntado = [...new Set([...(t.manual_id ? [t.manual_id] : []), ...(byManual.get(t.id) ?? []), ...(t.linked_tx_id ? [t.linked_tx_id] : []), ...(linkedTo.get(t.id) ?? [])])];
+          return {
+            id: t.id,
+            data: t.occurred_on,
+            descricao: t.description,
+            valor: reais(t.amount_cents),
+            entrada: t.is_inflow,
+            meio: METHOD_LABEL[t.method],
+            bucket: bucketLabels(d.settings)[t.bucket],
+            conta: t.account_id ? (names.get(t.account_id) ?? null) : null,
+            parcela: t.total_installments ? `${t.installment_number ?? "?"}/${t.total_installments}` : null,
+            // origem "manual" + do_banco=true: lançamento seu já juntado com a compra do banco (conta 1 vez)
+            origem: t.source,
+            do_banco: Boolean(t.external_id),
+            status: t.pluggy_status,
+            motivo_auto: t.auto_reason ?? null,
+            juntado_com: juntado,
+            conta_no_dia_a_dia: counts(t),
+            criado_em: t.created_at,
+          };
+        }),
       });
     },
   );
@@ -330,14 +386,19 @@ export function registerFinanceTools(server: McpServer) {
       title: "Faturas dos cartões",
       description:
         "Fatura prevista (ou real, quando o banco já fechou) de cada cartão num mês de vencimento, com as linhas que compõem o valor, " +
-        "além do limite disponível quando vem da Pluggy.",
-      inputSchema: z.object({ mes: MONTH.optional() }),
+        "além do limite disponível quando vem da Pluggy. Aceita filtrar por um cartão (nome ou nome original da Pluggy).",
+      inputSchema: z.object({
+        mes: MONTH.optional(),
+        cartao: z.string().optional().describe("Só este cartão (nome ou nome original da Pluggy)"),
+      }),
       annotations: READ_ONLY,
     },
-    async ({ mes }, ctx) => {
+    async ({ mes, cartao }, ctx) => {
       const d = await dataFor(ctx as Ctx);
       const month = toMonth(mes);
-      const inv = invoicesForMonth({ ...invoiceInputs(d), month });
+      const all = invoicesForMonth({ ...invoiceInputs(d), month });
+      const only = cartao ? matchCardId(d.accounts, cartao) : null;
+      const inv = cartao ? { ...all, cards: all.cards.filter((c) => c.accountId === only), total: all.cards.filter((c) => c.accountId === only).reduce((s, c) => s + c.total, 0) } : all;
       return json({
         mes_de_vencimento: month.slice(0, 7),
         valores_em: "reais",
@@ -352,6 +413,7 @@ export function registerFinanceTools(server: McpServer) {
           const acc = d.accounts.find((a) => a.id === c.accountId);
           return {
             cartao: c.name,
+            nome_no_banco: acc?.pluggy_name ?? null,
             total: reais(c.total),
             valor_real_do_banco: Boolean(c.real),
             origem: c.accountId === "reserva" ? "reserva do teto (estimativa; some quando o mês fechar)" : c.accountId === "plano" ? "parcelas do plano sem par no banco (estimativa)" : c.real ? "fatura fechada do banco" : c.fromBank ? "compras reais do banco (fatura aberta)" : "estimativa (sem banco conectado)",
@@ -460,17 +522,34 @@ function registerDiagnosticTools(server: McpServer) {
       const inputs = invoiceInputs(d);
       const prep = prepareInvoices(inputs);
       const since = addMonths(monthOf(today), -3);
+      const cardPayments = d.transactions.filter((t) => t.is_inflow && t.auto_reason === "pagamento_fatura");
       const paidBills = d.cardBills
-        .filter((b) => b.status === "paga" && (b.paid_cents ?? 0) > 0 && b.due_date >= since)
+        .filter((b) => b.status === "paga" && b.due_date >= since)
         .map((b) => {
+          const prevDue =
+            d.cardBills
+              .filter((x) => x.account_id === b.account_id && x.due_date < b.due_date)
+              .map((x) => x.due_date)
+              .sort()
+              .at(-1) ?? null;
+          const pays = billCyclePayments(b, prevDue, cardPayments.filter((p) => p.account_id === b.account_id));
           const month = monthOf(b.due_date);
           const card = invoicesForMonth({ ...inputs, month }, prep).cards.find((c) => c.accountId === b.account_id);
           const reconstructed = (card?.lines ?? [])
             .flatMap((l) => l.items ?? [])
             .filter((i) => i.origin === "banco" && i.id)
             .reduce((s, i) => s + i.cents, 0);
-          return { account_id: b.account_id, due_date: b.due_date, paid_cents: b.paid_cents ?? 0, reconstructed_cents: reconstructed };
+          const paid = pays.length ? pays.reduce((s, p) => s + p.amount_cents, 0) : (b.paid_cents ?? 0);
+          return {
+            account_id: b.account_id,
+            due_date: b.due_date,
+            paid_cents: paid,
+            reconstructed_cents: reconstructed,
+            payments: pays.map((p) => ({ id: p.id, data: p.occurred_on, valor: reais(p.amount_cents) })),
+          };
         });
+      // sem pagamento encontrado no ciclo (fatura zerada ou anterior à janela do sync): não diz nada
+      const paidBillsWithPayment = paidBills.filter((b) => b.paid_cents > 0);
       return json({
         hoje: today,
         valores_em: "reais",
@@ -482,7 +561,7 @@ function registerDiagnosticTools(server: McpServer) {
           transactions: d.transactions,
           installments: d.installments,
           coveredInstallmentIds: new Set(prep.covered.keys()),
-          paidBills,
+          paidBills: paidBillsWithPayment,
         }),
       });
     },
@@ -498,7 +577,7 @@ function registerDiagnosticTools(server: McpServer) {
         "origem (banco/calculada/projetada/plano/estimativa). Os itens somam exatamente a linha. Traz também o valor que o banco " +
         "informou, se a fatura está paga e os ids dos pagamentos casados. Use quando perguntarem 'de onde vem esse valor?'.",
       inputSchema: z.object({
-        cartao: z.string().min(1).describe("Nome (ou parte do nome) do cartão, ex.: Nubank, Inter, Santander"),
+        cartao: z.string().min(1).describe("Nome do cartão ou parte dele — aceita também o nome original da Pluggy (ex.: GOLD, PLATINUM)"),
         mes: MONTH.optional(),
       }),
       annotations: READ_ONLY,
@@ -508,8 +587,9 @@ function registerDiagnosticTools(server: McpServer) {
       const month = toMonth(mes);
       const inputs = invoiceInputs(d);
       const inv = invoicesForMonth({ ...inputs, month });
+      const accId = matchCardId(d.accounts, cartao);
       const q = cartao.trim().toLowerCase();
-      const card = inv.cards.find((c) => c.name.trim().toLowerCase() === q) ?? inv.cards.find((c) => c.name.toLowerCase().includes(q));
+      const card = (accId ? inv.cards.find((c) => c.accountId === accId) : undefined) ?? inv.cards.find((c) => c.name.toLowerCase().includes(q));
       if (!card) {
         return json({ mes_de_vencimento: month.slice(0, 7), erro: `Nenhuma fatura de "${cartao}" neste mês.`, cartoes_com_fatura: inv.cards.map((c) => c.name) });
       }
@@ -556,6 +636,287 @@ function registerDiagnosticTools(server: McpServer) {
           },
           bucketLabels(d.settings),
         ),
+      });
+    },
+  );
+}
+
+// ================= Fase 2: perguntas do dia a dia =================
+
+
+function findCard(d: AllData, name?: string) {
+  if (!name) return null;
+  const cards = d.accounts.filter((a) => a.kind === "credit_card");
+  const id = matchCardId(cards, name);
+  return id ? cards.find((a) => a.id === id) : undefined;
+}
+
+function registerDailyTools(server: McpServer) {
+  server.registerTool(
+    "simular_compra",
+    {
+      title: "Simular uma compra",
+      description:
+        "Responde 'cabe comprar X?' SEM gravar nada. À vista (parcelas=1): impacto no 'ainda posso gastar' do mês e na projeção. " +
+        "Parcelado: aloca as parcelas nas faturas do cartão (pelo fechamento) e devolve a projeção antes × depois mês a mês, " +
+        "meses negativos e meses abaixo de R$ 500 no cenário depois (e quais são novos). Parcelado exige o cartão.",
+      inputSchema: z.object({
+        valor_total: z.number().positive().max(1_000_000).describe("Valor total da compra em reais"),
+        parcelas: z.number().int().min(1).max(48).describe("Número de parcelas (1 = à vista)"),
+        cartao: z.string().optional().describe("Cartão (nome ou parte). Sem cartão = débito/Pix"),
+        data: DATE.optional().describe("Data da compra AAAA-MM-DD (padrão: hoje)"),
+        bucket: z.enum(["lazer", "mercado", "fixo", "assinatura", "parcela"]).optional().describe("Categoria (padrão: lazer à vista, parcela se parcelado)"),
+      }),
+      annotations: READ_ONLY,
+    },
+    async ({ valor_total, parcelas, cartao, data, bucket }, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const card = findCard(d, cartao);
+      if (cartao && !card) return json({ erro: `Cartão "${cartao}" não encontrado.`, cartoes: d.accounts.filter((a) => a.kind === "credit_card").map((a) => a.name.trim()) });
+      if (parcelas > 1 && !card) return json({ erro: "Compra parcelada precisa do cartão." });
+      const today = todayISO();
+      return json({
+        valores_em: "reais",
+        aviso: "simulação: nada foi gravado",
+        ...simulatePurchase(d, {
+          totalCents: Math.round(valor_total * 100),
+          parcelas,
+          cardId: card?.id ?? null,
+          date: data ?? today,
+          bucket: bucket ?? (parcelas > 1 ? "parcela" : "lazer"),
+          today,
+        }),
+      });
+    },
+  );
+
+  server.registerTool(
+    "proximos_vencimentos",
+    {
+      title: "Próximos vencimentos",
+      description:
+        "Fixos e faturas NÃO pagos que vencem nos próximos dias, em ordem de data: valor, vencimento, se é débito automático e " +
+        "saldo_cobre (saldo de hoje + entradas previstas até a data − vencimentos anteriores). Quando não cobre, diz quanto falta. " +
+        "Use para 'tenho dinheiro para pagar as contas da semana?'.",
+      inputSchema: z.object({ dias: z.number().int().min(1).max(62).optional().describe("Quantos dias à frente (padrão 7)") }),
+      annotations: READ_ONLY,
+    },
+    async ({ dias }, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const today = todayISO();
+      const until = addDays(today, dias ?? 7);
+      const inputs = invoiceInputs(d);
+      const txById = new Map(d.transactions.map((t) => [t.id, t]));
+      const items: DueItem[] = [];
+      for (const month of [...new Set([monthOf(today), monthOf(until)])]) {
+        const { bills } = billsForMonth({ ...inputs, month, payments: d.payments });
+        for (const b of bills.filter((x) => !x.paid)) {
+          if (b.key.startsWith("card:")) {
+            const acc = d.accounts.find((a) => `card:${a.id}` === b.key);
+            const bill = d.cardBills.find((x) => x.account_id === acc?.id && x.due_date.startsWith(month.slice(0, 7)));
+            const due = bill?.due_date ?? (acc?.due_day ? dayInMonth(month, acc.due_day) : null);
+            // débito automático: o cartão teve "PAGTO DEBITO AUTOMATICO" nos últimos 100 dias. Mesmo que você
+            // adiante parte da fatura on-line, o que sobra é debitado no vencimento
+            const autoPay = d.transactions.some(
+              (t) => t.account_id === acc?.id && t.is_inflow && t.occurred_on >= addDays(today, -100) && AUTO_DEBIT.test(t.description),
+            );
+            items.push({ name: b.name, cents: b.cents, due, autoDebit: autoPay, kind: "fatura" });
+          } else {
+            const fx = d.fixed.find((f) => `fixed:${f.id}` === b.key);
+            // dia provável: quando o mesmo fixo foi pago antes (marcação com a transação do banco)
+            const sameName = d.fixed.filter((f) => f.name === fx?.name).map((f) => `fixed:${f.id}`);
+            const pays = d.payments.filter((p) => sameName.includes(p.key) && p.transaction_id).map((p) => txById.get(p.transaction_id!)).filter(Boolean);
+            const day = likelyDay(pays.map((t) => t!.occurred_on));
+            const auto = pays.some((t) => AUTO_DEBIT.test(t!.description));
+            items.push({ name: b.name, cents: b.cents, due: day ? dayInMonth(month, day) : null, autoDebit: auto, kind: b.kind });
+          }
+        }
+      }
+      // entradas previstas ainda não recebidas, com o dia em que caíram no mês anterior
+      const month = monthOf(today);
+      const planned = d.incomes.filter((i) => i.month === month && i.source === "manual");
+      const pend = pendingIncomes(planned, d.incomes.filter((i) => i.month === month && i.source === "banco"));
+      const prevBank = d.incomes.filter((i) => i.month === addMonths(month, -1) && i.source === "banco" && i.transaction_id);
+      const incomes = pend.map((p) => {
+        const like = prevBank.find((b) => Math.abs(b.amount_cents - p.amount_cents) <= p.amount_cents * 0.05);
+        const on = like?.transaction_id ? txById.get(like.transaction_id)?.occurred_on : null;
+        const date = on ? dayInMonth(month, Number(on.slice(8, 10))) : null;
+        return { description: p.description, cents: p.amount_cents, date: date && date >= today ? date : null };
+      });
+      const bal = bankBalance(d);
+      return json({
+        hoje: today,
+        valores_em: "reais",
+        observacao: "entradas sem data conhecida não entram no 'saldo_cobre' (conta conservadora)",
+        ...upcomingDue({ today, days: dias ?? 7, balanceCents: bal?.cents ?? 0, items, incomes }),
+      });
+    },
+  );
+
+  server.registerTool(
+    "assinaturas",
+    {
+      title: "Assinaturas",
+      description:
+        "Assinaturas detectadas nos últimos 120 dias em QUALQUER categoria (inclusive Ignorar e lançamentos manuais juntados): " +
+        "serviços conhecidos (ChatGPT, Claude, Spotify, Apple, Amazon Prime…) e cobranças que se repetem todo mês. " +
+        "Nome, último débito e valor, valor médio, cartão, frequência, total mensal, quais AUMENTARAM de preço e cobranças avulsas. " +
+        "Use para 'quanto gasto com assinaturas?' ou 'alguma ficou mais cara?'.",
+      inputSchema: z.object({}),
+      annotations: READ_ONLY,
+    },
+    async (_args, ctx) => {
+      const d = await dataFor(ctx as Ctx);
+      const names = new Map(d.accounts.map((a) => [a.id, a.name.trim()]));
+      const today = todayISO();
+      const charges = d.transactions.map((t) => ({
+        id: t.id,
+        occurred_on: t.occurred_on,
+        description: t.description,
+        amount_cents: t.amount_cents,
+        account: t.account_id ? (names.get(t.account_id) ?? null) : null,
+        auto_reason: t.auto_reason,
+        bucket: t.bucket,
+        is_inflow: t.is_inflow,
+        total_installments: t.total_installments,
+      }));
+      return json({ valores_em: "reais", ...subscriptionStats(charges, today) });
+    },
+  );
+
+  server.registerTool(
+    "entradas",
+    {
+      title: "Entradas do mês",
+      description:
+        "Entradas previstas (salário, 13º, cadastradas) × recebidas (banco), com status recebida/pendente e quanto falta receber. " +
+        "Entradas do banco sem par ainda não confirmadas aparecem separadas. Use para 'o salário já caiu?'.",
+      inputSchema: z.object({ mes: MONTH.optional() }),
+      annotations: READ_ONLY,
+    },
+    async ({ mes }, ctx) => {
+      const { userId, admin } = userOf(ctx as Ctx);
+      const month = toMonth(mes);
+      const [d, { data: rows }] = await Promise.all([
+        loadAllFor(admin, userId),
+        admin.from("incomes").select("id, description, amount_cents, kind, source, status, transaction_id").eq("user_id", userId).eq("month", month),
+      ]);
+      const txById = new Map(d.transactions.map((t) => [t.id, t]));
+      return json({
+        mes: month.slice(0, 7),
+        valores_em: "reais",
+        ...incomesReport(
+          (rows ?? []).filter((r) => r.status !== "substituida"),
+          (id) => (id ? (txById.get(id)?.occurred_on ?? null) : null),
+        ),
+      });
+    },
+  );
+}
+
+function registerWriteTools(server: McpServer) {
+  server.registerTool(
+    "lancar_gasto",
+    {
+      title: "Lançar um gasto",
+      description:
+        "ÚNICA ferramenta que grava: cria UM lançamento manual de gasto (como o '+ Gasto' do painel). Não edita nem apaga nada. " +
+        "Use só quando o usuário pedir para lançar/anotar um gasto que JÁ aconteceu; para 'cabe comprar?' use simular_compra. " +
+        "Exige token com permissão de escrita. Passe sempre uma 'chave' única por gasto (ex.: um UUID): repetir a mesma chave " +
+        "não duplica, devolve o lançamento já feito. Quando a compra aparecer no banco, o painel junta os dois sozinho. " +
+        "Devolve o novo 'ainda posso gastar' do mês.",
+      inputSchema: z.object({
+        valor: z.number().positive().max(100_000).describe("Valor em reais"),
+        descricao: z.string().min(1).max(120).describe("O que foi (ex.: 'Almoço de domingo')"),
+        data: DATE.optional().describe("Data do gasto AAAA-MM-DD (padrão: hoje; não aceita futuro nem mais de 90 dias atrás)"),
+        bucket: z.enum(["lazer", "mercado", "fixo", "assinatura"]).optional().describe("Categoria (padrão: lazer)"),
+        meio: z.enum(["credito", "debito", "pix"]).optional().describe("Meio de pagamento (padrão: o do dia a dia do mês)"),
+        cartao: z.string().max(60).optional().describe("Cartão (nome ou parte); só no crédito"),
+        chave: z.string().min(8).max(100).optional().describe("Chave de idempotência: a mesma chave nunca cria dois lançamentos"),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, ctx) => {
+      if (!scopesOf(ctx as never).includes("write")) {
+        return {
+          ...json({ erro: "Este token é só leitura. Gere um token com permissão de escrita em Acesso do Claude para lançar gastos." }),
+          isError: true,
+        };
+      }
+      const { userId, admin } = userOf(ctx as Ctx);
+      const today = todayISO();
+      const d = await loadAllFor(admin, userId);
+
+      const existing = async () =>
+        input.chave
+          ? (
+              await admin
+                .from("transactions")
+                .select("id, occurred_on, description, amount_cents, bucket, method")
+                .eq("user_id", userId)
+                .eq("idempotency_key", input.chave.trim())
+                .maybeSingle()
+            ).data
+          : null;
+      const already = (t: NonNullable<Awaited<ReturnType<typeof existing>>>) => {
+        const r = remainingFor(d, t.occurred_on, today);
+        return json({
+          ja_lancado: true,
+          aviso: "essa chave já foi usada: nada novo foi gravado",
+          lancamento: { id: t.id, data: t.occurred_on, descricao: t.description, valor: reais(t.amount_cents), bucket: t.bucket, meio: METHOD_LABEL[t.method] ?? t.method },
+          ...(r ? { mes: r.mes, ainda_posso_gastar: reais(r.cents) } : {}),
+        });
+      };
+      const prev = await existing();
+      if (prev) return already(prev);
+
+      const built = buildGasto(d, input, today, (name) => findCard(d, name));
+      if ("erro" in built) return { ...json(built), isError: true };
+      const before = remainingFor(d, built.row.occurred_on, today);
+
+      const { data: created, error } = await admin
+        .from("transactions")
+        .insert({ ...built.row, user_id: userId, source: "manual" })
+        .select("id")
+        .single();
+      if (error) {
+        // corrida com a mesma chave: devolve o que entrou primeiro
+        if (error.code === "23505") {
+          const dup = await existing();
+          if (dup) return already(dup);
+        }
+        return { ...json({ erro: "Não foi possível salvar o gasto." }), isError: true };
+      }
+
+      const after = remainingFor(await loadAllFor(admin, userId), built.row.occurred_on, today);
+      const daily = built.row.bucket === "lazer" || built.row.bucket === "mercado";
+      return json({
+        lancado: true,
+        lancamento: {
+          id: created.id,
+          data: built.row.occurred_on,
+          descricao: built.row.description,
+          valor: reais(built.row.amount_cents),
+          bucket: built.row.bucket,
+          meio: METHOD_LABEL[built.row.method] ?? built.row.method,
+          cartao: built.cartao,
+        },
+        ...(before && after
+          ? {
+              dia_a_dia: {
+                mes: after.mes,
+                ainda_posso_gastar_antes: reais(before.cents),
+                ainda_posso_gastar: reais(after.cents),
+                ...(after.cents < 0 ? { passou_do_teto_em: reais(-after.cents) } : {}),
+                ...(after.period ? { periodo: { nome: after.period.name, teto: reais(after.period.cap), gasto: reais(after.period.spent), sobra: reais(after.period.remaining) } } : {}),
+                ...(after.periods.length ? { ainda_posso_gastar_fora_dos_periodos: reais(after.normalRemaining) } : {}),
+                fins_de_semana_restantes: after.weekends,
+                por_fim_de_semana: after.perWeekend ? reais(after.perWeekend.total) : null,
+              },
+            }
+          : {}),
+        ...(daily ? {} : { observacao: "fora do dia a dia (lazer/mercado): não muda o 'ainda posso gastar'" }),
+        desfazer: "para apagar, use o painel (Transações); o Claude não apaga lançamentos",
       });
     },
   );

@@ -23,7 +23,7 @@ Antes de dizer que terminou: `npm test`, `npm run typecheck` e `npm run lint` li
 ## Stack e peculiaridades
 
 - **Next.js 16** (App Router). Leia o `AGENTS.md`: a API mudou. Em especial:
-  - O middleware chama **`proxy.ts`** (protege tudo, exceto `/login`, `/configurar` sem Supabase, `/api/cron` com `CRON_SECRET` e `/api/mcp` com token).
+  - O middleware chama **`proxy.ts`** (protege tudo, exceto `/login`, `/configurar` sem Supabase, `/api/cron` com `CRON_SECRET`, `/api/mcp` com token e os endpoints públicos do OAuth: `/.well-known/*`, `/oauth/register`, `/oauth/token`, `/oauth/revoke`; o `/oauth/authorize` exige login e volta para ele depois).
   - **Cache Components ligado**: página que lê dados por request precisa de `await connection()` e de `<Suspense>` em volta, senão o build quebra.
 - **Supabase**: Postgres + Auth + RLS. Clientes em `lib/supabase/` (`server.ts` com a sessão; `admin.ts` com service role, **só** em cron e MCP).
 - **Tailwind v4 + shadcn (base-nova)**. Cards usam o utilitário **`surface`** (`app/globals.css`); valores em reais usam `<Money>`; card com título usa `<Panel>`.
@@ -36,7 +36,7 @@ app/(app)/            telas com login: / (visão geral), planejamento, projecao,
                       historico, assinaturas, triagem, conexoes, acesso-claude, saude-dos-dados, primeiros-passos
 app/configurar/       instalação (pública só enquanto o Supabase não está configurado)
 app/api/              rotas: bills, budgets, fixed, incomes, transactions, rules, settings, accounts,
-                      pluggy (token/sync/items), cron/sync (Pluggy agendado), mcp (somente leitura), tokens
+                      pluggy (token/sync/items), cron/sync (Pluggy agendado), mcp (leitura + lancar_gasto com escopo write), tokens, budget-periods, oauth-grants; `app/oauth/*` e `app/.well-known/*` = servidor OAuth 2.1 do conector
 components/home/      cards da visão geral; components/plan/ editores do planejamento; components/pluggy/
 lib/                  regras de negócio — quase tudo função pura e testada
 supabase/migrations/  schema completo (uma migração inicial)
@@ -60,7 +60,8 @@ Módulos de `lib/` que mais importam:
 | `labels.ts` | Rótulos; `bucketLabels(settings)` aplica os nomes que o usuário deu ao lazer/mercado. |
 | `onboarding.ts` / `setup-status.ts` | Etapas da configuração e quais variáveis de ambiente faltam (só booleanos). |
 | `demo-data.ts` / `demo-flag.ts` | Modo demonstração. |
-| `mcp/tools.ts` | Ferramentas do MCP somente leitura (`resumo_do_mes`, `projecao`, `transacoes`, `faturas`, `parcelas`, `contas`, `possiveis_duplicatas`, e o diagnóstico `saude`, `detalhe_fatura`, `detalhe_dia_a_dia`). Toda resposta traz `gerado_em` e `versao`. |
+| `mcp/tools.ts` | Ferramentas do MCP (`resumo_do_mes`, `projecao`, `transacoes`, `faturas`, `parcelas`, `contas`, `possiveis_duplicatas`, diagnóstico `saude`/`detalhe_fatura`/`detalhe_dia_a_dia`, `simular_compra`, `proximos_vencimentos`, `assinaturas`, `entradas` e a única de escrita, `lancar_gasto`). Toda resposta traz `gerado_em` e `versao`. |
+| `oauth.ts`, `oauth-authorize.ts`, `mcp-auth.ts` | Servidor OAuth 2.1 do conector do claude.ai (DCR sem estado, PKCE S256, tokens só como hash) e autenticação do `/api/mcp` (token `pf_` ou OAuth, limite de 120 chamadas/min). |
 | `mcp/views.ts` | Montagem das respostas de diagnóstico (puro e testado). Nada é recalculado aqui: os detalhes saem das mesmas funções que geram os totais (`invoicesForMonth`, `dailyTransactions`, `monthStatus`), por isso batem centavo a centavo. |
 
 ## Conceitos do domínio
@@ -79,7 +80,7 @@ Módulos de `lib/` que mais importam:
 3. **Nunca logue tokens nem dados bancários** (descrições, valores, contas). Logs de sync só com contagens.
 4. **Schema: mostre o plano antes e não apague dados.** Migrações aditivas; mudança de tipo/coluna com caminho de volta.
 5. **Tudo que o painel decide sozinho fica visível e reversível na Triagem**, com o motivo (`auto_reason`, `prev_bucket`). Decisão do usuário (`user_locked`) não é sobrescrita pelo motor.
-6. **MCP é somente leitura.**
+6. **MCP é leitura, com uma exceção controlada:** `lancar_gasto` só funciona com escopo `write` (token ou conexão OAuth autorizada com “Permitir lançar gastos”) e só **cria** um gasto manual, com chave de idempotência. Nenhuma ferramenta edita ou apaga.
 7. Lógica de dinheiro nova vai para `lib/` como função pura **com teste**.
 
 ## Adaptar às necessidades de cada pessoa

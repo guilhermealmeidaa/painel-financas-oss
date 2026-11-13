@@ -14,7 +14,6 @@ import { cn } from "@/lib/utils";
 export function DiaADiaCard({
   status,
   method,
-  isCurrent,
   allWeekends,
   skipped,
   items,
@@ -23,7 +22,6 @@ export function DiaADiaCard({
 }: {
   status: MonthStatus;
   method: "credito" | "debito_pix";
-  isCurrent: boolean;
   allWeekends: string[];
   skipped: string[];
   items: TxItem[];
@@ -95,7 +93,7 @@ export function DiaADiaCard({
         </div>
       )}
 
-      {isCurrent && allWeekends.length > 0 && (
+      {allWeekends.length > 0 && (
         <div className="flex flex-col gap-2.5 rounded-[14px] bg-muted/70 p-3.5">
           <p className="text-[13px] leading-snug">
             <span className="font-semibold tabular-nums">
@@ -112,6 +110,20 @@ export function DiaADiaCard({
           <WeekendChips all={allWeekends} skipped={skipped} />
         </div>
       )}
+
+      {status.periods.map((p) => (
+        <div key={p.start} className="flex items-center justify-between gap-3 rounded-[14px] bg-muted/70 p-3.5 text-[13px]">
+          <span>
+            <span className="font-semibold">{p.name}</span>{" "}
+            <span className="text-muted-foreground">
+              {p.start.slice(8, 10)}/{p.start.slice(5, 7)}–{p.end.slice(8, 10)}/{p.end.slice(5, 7)} · teto {formatBRLShort(p.cap)}
+            </span>
+          </span>
+          <span className={cn("font-semibold tabular-nums", p.remaining < 0 && "text-destructive")}>
+            {p.remaining < 0 ? `passou ${formatBRLShort(-p.remaining)}` : `sobra ${formatBRLShort(p.remaining)}`}
+          </span>
+        </div>
+      ))}
 
       <div className="flex min-h-0 flex-col">
         <p className="mb-1 text-[13px] font-semibold">Gastos do mês</p>

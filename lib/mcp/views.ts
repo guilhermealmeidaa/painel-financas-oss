@@ -133,11 +133,11 @@ export interface HealthInput {
   today: string;
   accounts: { id: string; name: string; kind: string; pluggy_account_id: string | null; pluggy_item_id: string | null; synced_at: string | null }[];
   items: { item_id: string; connector_name: string | null; status: string | null; last_synced_at: string | null }[];
-  transactions: { id: string; occurred_on: string; description: string; amount_cents: number; bucket: string; source: string; manual_id: string | null; is_inflow: boolean; account_id: string | null }[];
+  transactions: { id: string; occurred_on: string; description: string; amount_cents: number; bucket: string; source: string; manual_id: string | null; external_id: string | null; is_inflow: boolean; account_id: string | null }[];
   installments: { id: string; name: string; status: string; installment_cents: number; installments_count: number; first_invoice_month: string; account_id: string | null }[];
   coveredInstallmentIds: Set<string>;
   /** faturas já pagas com o total reconstruído pelo painel (compras + parcelas ligadas à fatura) */
-  paidBills: { account_id: string; due_date: string; paid_cents: number; reconstructed_cents: number }[];
+  paidBills: { account_id: string; due_date: string; paid_cents: number; reconstructed_cents: number; payments?: { id: string; data: string; valor: number }[] }[];
 }
 
 const STALE_HOURS = 36;
@@ -177,7 +177,10 @@ export function healthReport(h: HealthInput) {
     .map((i) => ({ id: i.id, nome: i.name, parcela: reais(i.installment_cents), parcelas: i.installments_count, primeira_fatura: i.first_invoice_month.slice(0, 7), cartao_informado: i.account_id ? (name.get(i.account_id) ?? null) : null }));
   if (semPar.length) alertas.push(`Parcelas do plano ainda sem par no banco (contam como estimativa): ${semPar.map((p) => p.nome).join(", ")}.`);
 
+  // mesmo critério de vínculo das faturas: manual juntado com o banco fica com external_id (vira a
+  // própria transação do banco) ou é apontado por manual_id de uma transação do banco
   const linked = new Set(h.transactions.filter((t) => t.manual_id).map((t) => t.manual_id!));
+  for (const t of h.transactions) if (t.source === "manual" && t.external_id) linked.add(t.id);
   const limite = addDays(h.today, -3);
   const desde = addDays(h.today, -60);
   const manuais = h.transactions
@@ -193,6 +196,7 @@ export function healthReport(h: HealthInput) {
       reconstruida: reais(b.reconstructed_cents),
       paga: reais(b.paid_cents),
       diferenca: reais(dif),
+      pagamentos: b.payments ?? [],
     };
     if (Math.abs(dif) > 100) {
       const why =

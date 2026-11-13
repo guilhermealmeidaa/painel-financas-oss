@@ -26,16 +26,27 @@ export async function runEngineFor(db: DB, userId: string): Promise<EngineSummar
   const firstMonth = settings?.projection_start ?? "2000-01-01";
   const since = addDays(firstMonth, -7);
 
-  const [{ data: rows }, { data: accounts }, { data: rules }, { data: plannedSalary }] = await Promise.all([
+  const [{ data: rows }, { data: accounts }, { data: older }, { data: rules }, { data: plannedSalary }] = await Promise.all([
     db
       .from("transactions")
       .select(
-        "id, occurred_on, description, amount_cents, is_inflow, method, bucket, account_id, pluggy_category, source, user_locked, superseded, auto_reason",
+        "id, occurred_on, description, amount_cents, is_inflow, method, bucket, account_id, pluggy_category, source, user_locked, superseded, auto_reason, installment_number, total_installments",
       )
       .eq("user_id", userId)
       .gte("occurred_on", since)
       .limit(20000),
     db.from("accounts").select("id, kind").eq("user_id", userId),
+    // parcelas de antes da janela: o motor reconhece a série ("5/1" depois de "3/6" e "4/6")
+    db
+      .from("transactions")
+      .select(
+        "id, occurred_on, description, amount_cents, is_inflow, method, bucket, account_id, pluggy_category, source, user_locked, superseded, auto_reason, installment_number, total_installments",
+      )
+      .eq("user_id", userId)
+      .lt("occurred_on", since)
+      .gte("occurred_on", addDays(since, -400))
+      .gte("total_installments", 2)
+      .limit(5000),
     db.from("categorization_rules").select("pattern, bucket, subtype, origin").eq("user_id", userId),
     db.from("incomes").select("amount_cents").eq("user_id", userId).eq("kind", "salario").eq("source", "manual").limit(1),
   ]);
@@ -47,7 +58,12 @@ export async function runEngineFor(db: DB, userId: string): Promise<EngineSummar
   }));
   const self = { names: settings?.self_names ?? [], taxIds: settings?.self_tax_ids ?? [] };
 
-  const decisions = runEngine({ txs, rules: (rules ?? []) as EngineRule[], self });
+  const history: EngineTx[] = (older ?? []).map((t) => ({
+    ...t,
+    bucket: t.bucket as Bucket,
+    account_kind: t.account_id ? (kind.get(t.account_id) ?? null) : null,
+  }));
+  const decisions = runEngine({ txs, rules: (rules ?? []) as EngineRule[], self, history });
   const payload = [...decisions.entries()].map(([id, d]) => ({
     id,
     bucket: d.bucket,

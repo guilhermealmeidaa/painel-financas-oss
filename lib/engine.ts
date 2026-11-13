@@ -7,6 +7,7 @@
  * - Pares/trincas que representam o MESMO dinheiro (Pix no crédito, pagamento de fatura,
  *   transferência própria) viram "ignorar" dos lados que não são gasto de verdade.
  */
+import { repairSeries } from "./cards";
 import { defaultBucket } from "./pluggy/map";
 import type { Bucket } from "./projection";
 
@@ -25,6 +26,8 @@ export interface EngineTx {
   user_locked: boolean;
   superseded: boolean;
   auto_reason: string | null;
+  installment_number?: number | null;
+  total_installments?: number | null;
 }
 
 export interface EngineRule {
@@ -46,6 +49,8 @@ export interface EngineInput {
   txs: EngineTx[];
   rules: EngineRule[];
   self: { names: string[]; taxIds: string[] };
+  /** parcelas mais antigas que a janela do motor: só para reconhecer séries (nunca são alteradas) */
+  history?: EngineTx[];
 }
 
 // ---------- utilidades ----------
@@ -98,7 +103,7 @@ const IOF = /^(iof|juros)|\biof\b|juros parcelado|encargos/;
 
 // ---------- motor ----------
 
-export function runEngine({ txs, rules, self }: EngineInput): Map<string, Decision> {
+export function runEngine({ txs, rules, self, history = [] }: EngineInput): Map<string, Decision> {
   const out = new Map<string, Decision>();
   const editable = (t: EngineTx) => !t.user_locked && !t.superseded && t.source !== "manual";
   const set = (t: EngineTx, d: Decision) => {
@@ -226,6 +231,30 @@ export function runEngine({ txs, rules, self }: EngineInput): Map<string, Decisi
       continue;
     }
     if (fee != null) set(t, { bucket: t.bucket, auto_reason: t.auto_reason ?? "pix_no_credito_taxa", fee_cents: fee });
+  }
+
+  // 4b) Continuação de série de parcelas com n/total errado do banco ("PET SHOP 5/1" depois de 3/6 e 4/6):
+  // vira Parcela. Ganha da categoria do banco e das regras (a série é evidência mais forte); decisão sua não.
+  const liveIds = new Set(live.map((t) => t.id));
+  const series = repairSeries(
+    [...history.filter((h) => !liveIds.has(h.id)), ...live]
+      .filter((t) => !t.is_inflow && t.account_kind === "credit_card")
+      .map((t) => ({
+        id: t.id,
+        account_id: t.account_id,
+        occurred_on: t.occurred_on,
+        description: t.description,
+        amount_cents: t.amount_cents,
+        installment_number: t.installment_number ?? null,
+        total_installments: t.total_installments ?? null,
+        pluggy_bill_id: null,
+      })),
+  );
+  for (const t of live) {
+    if (!series.has(t.id)) continue;
+    const cur = out.get(t.id)?.auto_reason ?? t.auto_reason;
+    const automatic = !cur || cur === "categoria_banco" || cur.startsWith("regra:") || cur === "parcela_da_serie";
+    if (automatic && (out.get(t.id)?.bucket ?? t.bucket) !== "parcela") set(t, { bucket: "parcela", auto_reason: "parcela_da_serie" });
   }
 
   // 5) IOF / juros herdam o bucket da compra do mesmo cartão (0 a 2 dias antes); senão lazer

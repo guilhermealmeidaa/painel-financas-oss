@@ -16,6 +16,7 @@ export interface TokenRow {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  scopes: string[];
 }
 
 async function copy(text: string) {
@@ -32,6 +33,7 @@ export function TokenManager({ tokens, mcpUrl }: { tokens: TokenRow[]; mcpUrl: s
   const [name, setName] = useState("Claude Code");
   const [created, setCreated] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [write, setWrite] = useState(false);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -39,12 +41,13 @@ export function TokenManager({ tokens, mcpUrl }: { tokens: TokenRow[]; mcpUrl: s
     const res = await fetch("/api/tokens", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, write }),
     });
     const data = await res.json().catch(() => ({}));
     setBusy(false);
     if (!res.ok) return toast.error(data.error ?? "Erro");
     setCreated(data.token);
+    setWrite(false);
     router.refresh();
   }
 
@@ -67,6 +70,15 @@ export function TokenManager({ tokens, mcpUrl }: { tokens: TokenRow[]; mcpUrl: s
           <KeyRound className="size-4" /> Gerar token
         </Button>
       </form>
+      <label className="-mt-2 flex items-start gap-2 text-sm">
+        <input type="checkbox" checked={write} onChange={(e) => setWrite(e.target.checked)} className="mt-0.5 size-4 accent-primary" />
+        <span>
+          Permitir lançar gastos
+          <span className="block text-xs text-muted-foreground">
+            Libera só a ferramenta lancar_gasto, que cria um lançamento manual. Nada é editado nem apagado.
+          </span>
+        </span>
+      </label>
 
       {created && (
         <div className="flex flex-col gap-3 rounded-2xl bg-warning/15 p-4 text-sm">
@@ -95,7 +107,12 @@ export function TokenManager({ tokens, mcpUrl }: { tokens: TokenRow[]; mcpUrl: s
         {tokens.map((t) => (
           <li key={t.id} className="flex items-center justify-between gap-3 py-2.5">
             <div className="min-w-0">
-              <p className={t.revoked_at ? "text-muted-foreground line-through" : "font-medium"}>{t.name}</p>
+              <p className={t.revoked_at ? "text-muted-foreground line-through" : "font-medium"}>
+                {t.name}{" "}
+                <span className={`ml-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${t.scopes.includes("write") ? "bg-warning/20" : "bg-muted text-muted-foreground"}`}>
+                  {t.scopes.includes("write") ? "leitura + lançar gastos" : "só leitura"}
+                </span>
+              </p>
               <p className="text-xs text-muted-foreground">
                 <span className="font-mono">{t.prefix}…</span> · criado {dt.format(new Date(t.created_at))} · último uso{" "}
                 {t.last_used_at ? dt.format(new Date(t.last_used_at)) : "nunca"}

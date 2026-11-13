@@ -98,7 +98,7 @@ describe("regra 3: pagamento de fatura e transferência própria", () => {
   it("descrições de pagamento de fatura na conta são ignoradas mesmo sem o par", () => {
     const d = runEngine({
       txs: [
-        tx({ id: "a", description: "PAGAMENTO CARTAO CREDITO BCE", reais: 1495.06, on: "2026-11-05", method: "debito", pluggy_category: "Credit card payment" }),
+        tx({ id: "a", description: "PAGAMENTO CARTAO CREDITO BCE", reais: 1500, on: "2026-11-05", method: "debito", pluggy_category: "Credit card payment" }),
         tx({ id: "b", description: "Pagamento efetuado - Pagamento Fatura - Cartão", reais: 155.5, on: "2026-11-10", method: "debito", pluggy_category: "Transfers" }),
       ],
       rules: [],

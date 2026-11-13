@@ -75,7 +75,13 @@ export async function syncCardsFor(db: DB, userId: string): Promise<CardsSummary
   for (const b of bills ?? []) {
     if (b.status === "paga") continue;
     const amount = (b.pluggy_bill_id && billSum.get(b.pluggy_bill_id)) || b.total_cents;
-    const res = billPayment({ ...b, total_cents: amount }, (cardPayments ?? []).filter((p) => p.account_id === b.account_id));
+    const prevDue =
+      (bills ?? [])
+        .filter((x) => x.account_id === b.account_id && x.due_date < b.due_date)
+        .map((x) => x.due_date)
+        .sort()
+        .at(-1) ?? null;
+    const res = billPayment({ ...b, total_cents: amount }, (cardPayments ?? []).filter((p) => p.account_id === b.account_id), prevDue);
     if (!res.paid) continue;
     await db
       .from("card_bills")

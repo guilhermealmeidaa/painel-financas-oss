@@ -139,14 +139,16 @@ describe("saude", () => {
       ],
       items: [{ item_id: "it", connector_name: "MeuPluggy", status: "UPDATED", last_synced_at: "2026-11-12T10:00:00Z" }],
       transactions: [
-        { id: "m1", occurred_on: "2026-11-02", description: "Jantar", amount_cents: 16100, bucket: "mercado", source: "manual", manual_id: null, is_inflow: false, account_id: null },
-        { id: "s1", occurred_on: "2026-11-10", description: "LOJA", amount_cents: 1200, bucket: "sem_categoria", source: "pluggy", manual_id: null, is_inflow: false, account_id: "fv" },
+        { id: "m1", occurred_on: "2026-11-02", description: "Jantar", amount_cents: 16100, bucket: "mercado", source: "manual", manual_id: null, external_id: null, is_inflow: false, account_id: null },
+        // manual já juntado com o banco (ficou com o external_id): NÃO é "sem par"
+        { id: "m2", occurred_on: "2026-11-06", description: "Barbeiro", amount_cents: 12000, bucket: "lazer", source: "manual", manual_id: null, external_id: "pluggy-123", is_inflow: false, account_id: "fv" },
+        { id: "s1", occurred_on: "2026-11-10", description: "LOJA", amount_cents: 1200, bucket: "sem_categoria", source: "pluggy", manual_id: null, external_id: "pluggy-456", is_inflow: false, account_id: "fv" },
       ],
       installments: [{ id: "g", name: "Videogame", status: "ativa", installment_cents: 13748, installments_count: 4, first_invoice_month: "2026-12-01", account_id: "fv" }],
       coveredInstallmentIds: new Set(),
       paidBills: [{ account_id: "fv", due_date: "2026-11-04", paid_cents: 150000, reconstructed_cents: 70000 }],
     });
-    expect(r.faturas_reconstruidas_vs_pagas[0]).toEqual({ cartao: "Cartão A", mes: "2026-11", reconstruida: 700, paga: 1500, diferenca: 800 });
+    expect(r.faturas_reconstruidas_vs_pagas[0]).toMatchObject({ cartao: "Cartão A", mes: "2026-11", reconstruida: 700, paga: 1500, diferenca: 800 });
     expect(r.alertas.some((a) => a.includes("Cartão A 2026-11: reconstruída 700.00 × paga 1500.00"))).toBe(true);
     expect(r.contas.find((c) => c.conta === "Cartão A")?.status_sync).toBe("ok");
     expect(r.contas.find((c) => c.conta === "Cartão antigo")).toMatchObject({ status_sync: "sem_banco", ligado_ao_cadastro: false });
@@ -167,5 +169,66 @@ describe("saude", () => {
       paidBills: [],
     });
     expect(r.contas[0].status_sync).toBe("atrasado");
+  });
+});
+
+import { billCyclePayments, repairSeries } from "@/lib/cards";
+import { runEngine } from "@/lib/engine";
+
+describe("parcela com n/total errado do banco continua a série", () => {
+  const row = (id: string, on: string, n: number | null, total: number | null, cents = 5000) => ({
+    id,
+    account_id: "nu",
+    occurred_on: on,
+    description: "PET SHOP",
+    amount_cents: cents,
+    installment_number: n,
+    total_installments: total,
+    pluggy_bill_id: null,
+  });
+  it("3/6 e 4/6 seguidos de 5/1 e 6/1 viram 5/6 e 6/6", () => {
+    const r = repairSeries([row("a", "2026-09-08", 3, 6), row("b", "2026-10-08", 4, 6), row("c", "2026-11-15", 5, 1), row("d", "2026-12-15", 6, 1)]);
+    expect(r.get("c")).toEqual({ installment_number: 5, total_installments: 6 });
+    expect(r.get("d")).toEqual({ installment_number: 6, total_installments: 6 });
+  });
+  it("sem n: usa a última parcela + meses; valor fora de ±1% ou outro cartão não é da série", () => {
+    const r = repairSeries([row("a", "2026-09-08", 3, 6), row("b", "2026-11-10", null, null), row("c", "2026-11-11", null, null, 6000), { ...row("d", "2026-11-12", null, null), account_id: "inter" }]);
+    expect(r.get("b")).toEqual({ installment_number: 5, total_installments: 6 });
+    expect(r.has("c")).toBe(false);
+    expect(r.has("d")).toBe(false);
+  });
+  it("não passa do total: série já terminada não puxa compra nova", () => {
+    const r = repairSeries([row("a", "2026-09-08", 6, 6), row("b", "2026-10-08", null, null)]);
+    expect(r.has("b")).toBe(false);
+  });
+  it("o motor marca como Parcela (parcela_da_serie), por cima da categoria do banco, e não mexe no que você travou", () => {
+    const base = { is_inflow: false, method: "credito" as const, account_id: "nu", account_kind: "credit_card" as const, pluggy_category: null, source: "pluggy", superseded: false };
+    const txs = [
+      { ...base, id: "a", occurred_on: "2026-09-08", description: "PET SHOP", amount_cents: 5000, bucket: "parcela" as const, user_locked: false, auto_reason: null, installment_number: 3, total_installments: 6 },
+      { ...base, id: "b", occurred_on: "2026-10-08", description: "PET SHOP", amount_cents: 5000, bucket: "parcela" as const, user_locked: false, auto_reason: null, installment_number: 4, total_installments: 6 },
+      { ...base, id: "c", occurred_on: "2026-11-15", description: "PET SHOP", amount_cents: 5000, bucket: "lazer" as const, user_locked: false, auto_reason: "categoria_banco", installment_number: 5, total_installments: 1 },
+      { ...base, id: "d", occurred_on: "2026-12-15", description: "PET SHOP", amount_cents: 5000, bucket: "lazer" as const, user_locked: true, auto_reason: null, installment_number: 6, total_installments: 1 },
+    ];
+    const d = runEngine({ txs, rules: [], self: { names: [], taxIds: [] } });
+    expect(d.get("c")).toMatchObject({ bucket: "parcela", auto_reason: "parcela_da_serie" });
+    expect(d.has("d")).toBe(false);
+    // as parcelas antigas fora da janela do motor vêm como histórico, só para reconhecer a série
+    const h = runEngine({ txs: txs.slice(2), history: txs.slice(0, 2), rules: [], self: { names: [], taxIds: [] } });
+    expect(h.get("c")).toMatchObject({ bucket: "parcela", auto_reason: "parcela_da_serie" });
+    expect(h.has("a")).toBe(false);
+  });
+});
+
+describe("pagamentos da fatura: o ciclo inteiro, não só o último", () => {
+  it("fatura de nov (vence 15/11): 2.000,00 em 05/11 + 150,00 em 10/11; o de 10/10 pagou a fatura de outubro", () => {
+    const pays = [
+      { id: "p0", occurred_on: "2026-10-10", amount_cents: 99999 },
+      { id: "p1", occurred_on: "2026-11-05", amount_cents: 200000 },
+      { id: "p2", occurred_on: "2026-11-10", amount_cents: 15000 },
+      { id: "p3", occurred_on: "2026-11-25", amount_cents: 5000 },
+    ];
+    const r = billCyclePayments({ due_date: "2026-11-15" }, "2026-10-14", pays);
+    expect(r.map((p) => p.id)).toEqual(["p1", "p2"]);
+    expect(r.reduce((s, p) => s + p.amount_cents, 0)).toBe(215000);
   });
 });

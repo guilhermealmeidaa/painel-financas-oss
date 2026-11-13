@@ -26,7 +26,14 @@ export default function LoginPage() {
       setError("E-mail ou senha incorretos.");
       return;
     }
-    router.replace("/");
+    // volta para onde estava (ex.: autorizar o conector do Claude); só caminhos internos
+    const next = new URLSearchParams(window.location.search).get("next");
+    const safe = next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") && !next.startsWith("/login") ? next : null;
+    if (safe?.startsWith("/oauth/")) {
+      window.location.assign(safe);
+      return;
+    }
+    router.replace(safe ?? "/");
     router.refresh();
   }
 

@@ -33,6 +33,7 @@ const GROUP_LABEL: Record<string, string> = {
   categoria_banco: "Categoria do banco",
   iof_herdado: "IOF e juros",
   juntado_manual: "Juntados com seus lançamentos",
+  parcela_da_serie: "Continuações de compras parceladas",
 };
 
 /** Tudo que o painel classificou sozinho, agrupado por motivo, com "Desfazer". */

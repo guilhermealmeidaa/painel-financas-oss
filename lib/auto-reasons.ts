@@ -11,6 +11,7 @@ export function reasonLabel(reason: string): string {
       categoria_banco: "Categoria do banco",
       juntado_manual: "Juntado com seu lançamento",
       parcela: "Parcela",
+      parcela_da_serie: "Continuação de uma compra parcelada",
     } as Record<string, string>
   )[reason] ?? reason;
 }

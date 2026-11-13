@@ -71,7 +71,7 @@ Abra http://localhost:3000. Se faltar alguma chave do Supabase, o painel mostra 
 | **Parcelas** | Compras parceladas planejadas e quanto da renda já está comprometido |
 | **Triagem** | O que o banco mandou sem categoria e tudo o que o painel decidiu sozinho, com o motivo |
 | **Conexões** | Conectar bancos, ligar cartões do banco aos seus e sincronizar agora |
-| **Acesso do Claude** | Token para um servidor MCP somente leitura (veja [`docs/mcp.md`](docs/mcp.md)) |
+| **Acesso do Claude** | Conector do claude.ai (OAuth) ou token para o Claude Code: o Claude consulta as finanças e, se você permitir, lança gastos (veja [`docs/mcp.md`](docs/mcp.md)) |
 
 ## Faça do seu jeito
 

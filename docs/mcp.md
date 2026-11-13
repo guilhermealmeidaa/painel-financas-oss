@@ -1,6 +1,6 @@
 # Conversar com o Claude sobre as suas finanças (MCP)
 
-O painel expõe um servidor [MCP](https://modelcontextprotocol.io) **somente leitura** em `/api/mcp`. Com ele, o Claude consegue responder perguntas como “quanto ainda posso gastar este mês?” ou “por que a fatura de dezembro está alta?” usando os seus dados, sem conseguir mudar nada.
+O painel expõe um servidor [MCP](https://modelcontextprotocol.io) em `/api/mcp`. Com ele, o Claude consegue responder perguntas como “quanto ainda posso gastar este mês?”, “cabe comprar isso em 4×?” ou “por que a fatura de dezembro está alta?” usando os seus dados. Tudo é leitura, exceto `lancar_gasto`, que só funciona se você permitir e só **cria** um gasto manual (nunca edita nem apaga).
 
 Ferramentas:
 
@@ -14,12 +14,31 @@ Ferramentas:
 - `saude`: diagnóstico dos dados (último sync de cada conta, gastos sem categoria, parcelas do plano sem par no banco, lançamentos manuais sem a transação do banco e faturas pagas cujo valor reconstruído não bate). Use primeiro quando um número parecer estranho.
 - `detalhe_fatura`: abre a fatura de um cartão linha por linha, com id, data e parcela de cada item. Para “de onde vem esse valor da fatura?”. Os itens somam exatamente cada linha.
 - `detalhe_dia_a_dia`: lista todas as transações que entram no dia a dia (lazer/mercado) do mês. O total bate centavo a centavo com o `resumo_do_mes`. Para “achar um gasto que não deveria contar?”.
+- `simular_compra`: “cabe comprar X?” sem gravar nada. À vista dentro do teto do dia a dia só muda o “ainda posso gastar”; parcelado aloca as parcelas nas faturas pelo fechamento do cartão e mostra a projeção antes × depois.
+- `proximos_vencimentos`: fixos e faturas não pagos dos próximos dias, se o saldo cobre cada um e se é débito automático.
+- `assinaturas`: cobranças recorrentes em qualquer categoria, total mensal e quais aumentaram de preço.
+- `entradas`: entradas previstas × recebidas no mês.
+- `lancar_gasto` (escrita, opcional): cria um gasto manual que já aconteceu e devolve o novo “ainda posso gastar”. Aceita uma `chave` de idempotência: repetir a mesma chave não duplica.
+
+O ritmo por fim de semana divide o que sobra pelos fins de semana que ainda contam (no mês futuro, todos), sem os marcados “sem gasto” e sem os de **períodos especiais** (ex.: uma viagem com teto próprio, cadastrada no Planejamento).
 
 Toda resposta traz `gerado_em` (data e hora em São Paulo) e `versao` (commit e data do build no ar), para saber se o número é de agora e de qual versão do painel veio.
 
-## 1. Gerar o token
+## Conector do claude.ai (OAuth)
 
-No painel, abra **Acesso do Claude**, dê um nome (ex.: “Claude Desktop”) e gere o token. Ele aparece uma vez só: copie. Na mesma tela dá para revogar.
+Para usar no claude.ai, no app do celular ou no Claude Desktop, sem token manual:
+
+1. No claude.ai: **Configurações → Conectores → Adicionar conector personalizado**.
+2. Nome `Finanças` e URL `https://SEU-PAINEL/api/mcp`. Deixe client ID e secret em branco.
+3. Clique em **Conectar**, entre no painel se ele pedir e autorize. Marque “Permitir lançar gastos” só se quiser que o Claude possa lançar.
+
+O painel tem o próprio servidor de autorização OAuth 2.1 (PKCE S256, registro dinâmico de cliente aceitando só os endereços de retorno do Claude, token de acesso de 1 hora e refresh de 30 dias trocado a cada uso). Cada conexão aparece em **Acesso do Claude** e pode ser revogada. Para conferir os endpoints públicos depois do deploy: `npm run smoke:oauth -- https://SEU-PAINEL`.
+
+> Opcional: defina `OAUTH_SECRET` (32+ caracteres) no servidor. Sem ela, a chave que assina os clientes é derivada da `SUPABASE_SERVICE_ROLE_KEY`; trocar essa chave obriga a reconectar o conector.
+
+## 1. Gerar o token (Claude Code e outros clientes)
+
+No painel, abra **Acesso do Claude**, dê um nome (ex.: “Claude Code”) e gere o token. Marque “Permitir lançar gastos” se quiser liberar o `lancar_gasto`. Ele aparece uma vez só: copie. Na mesma tela dá para revogar.
 
 > O MCP usa a `SUPABASE_SERVICE_ROLE_KEY` no servidor. Sem ela configurada, o endpoint responde com erro.
 

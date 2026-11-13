@@ -18,7 +18,7 @@ export type Account = Tables<"accounts">;
 export type Transaction = Tables<"transactions">;
 export type Installment = Tables<"installment_purchases">;
 export type FixedExpense = Tables<"fixed_expenses">;
-export type Budget = Tables<"monthly_budgets"> & { allocations: Tables<"budget_allocations">[] };
+export type Budget = Tables<"monthly_budgets"> & { allocations: Tables<"budget_allocations">[]; periods: Tables<"budget_periods">[] };
 
 /** Carrega tudo do usuário logado (RLS filtra). O volume é pequeno: um usuário, poucos meses. */
 export async function loadAll(): Promise<AllData> {
@@ -37,7 +37,7 @@ export async function loadAll(): Promise<AllData> {
  * então também é seguro com a service role (API do Claude/MCP).
  */
 export async function loadAllFor(supabase: SupabaseClient<Database>, userId: string, email = "") {
-  const [settings, accounts, incomes, fixed, installments, budgets, allocations, transactions, payments, cardBills] = await Promise.all([
+  const [settings, accounts, incomes, fixed, installments, budgets, allocations, transactions, payments, cardBills, periods] = await Promise.all([
     supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
     supabase.from("accounts").select("*").eq("user_id", userId).order("name"),
     // entradas válidas: planejadas confirmadas + vindas do banco (auto/confirmadas); substituídas e rejeitadas não contam
@@ -57,13 +57,15 @@ export async function loadAllFor(supabase: SupabaseClient<Database>, userId: str
     // marcações de pago; as que você desfez (dismissed) vêm separadas e não contam
     supabase.from("bill_payments").select("month, key, transaction_id, dismissed").eq("user_id", userId),
     supabase.from("card_bills").select("account_id, due_date, total_cents, pluggy_bill_id, closing_date, status, paid_cents, payment_tx_id").eq("user_id", userId),
+    supabase.from("budget_periods").select("*").eq("user_id", userId).order("start_date"),
   ]);
-  for (const r of [settings, accounts, incomes, fixed, installments, budgets, allocations, transactions, payments, cardBills]) {
+  for (const r of [settings, accounts, incomes, fixed, installments, budgets, allocations, transactions, payments, cardBills, periods]) {
     if (r.error) throw new Error(`Falha ao carregar dados: ${r.error.message}`);
   }
   const budgetsWithAlloc: Budget[] = (budgets.data ?? []).map((b) => ({
     ...b,
     allocations: (allocations.data ?? []).filter((a) => a.budget_id === b.id),
+    periods: (periods.data ?? []).filter((p) => p.month === b.month),
   }));
   return {
     settings: settings.data,

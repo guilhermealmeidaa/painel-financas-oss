@@ -18,6 +18,7 @@ export type Database = {
     Tables: {
       accounts: {
         Row: {
+          pluggy_name: string | null
           days_source: string | null
           available_limit_cents: number | null
           balance_cents: number | null
@@ -36,6 +37,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          pluggy_name?: string | null
           days_source?: string | null
           available_limit_cents?: number | null
           balance_cents?: number | null
@@ -54,6 +56,7 @@ export type Database = {
           user_id?: string
         }
         Update: {
+          pluggy_name?: string | null
           days_source?: string | null
           available_limit_cents?: number | null
           balance_cents?: number | null
@@ -81,6 +84,7 @@ export type Database = {
           name: string
           prefix: string
           revoked_at: string | null
+          scopes: string[]
           token_hash: string
           user_id: string
         }
@@ -91,6 +95,7 @@ export type Database = {
           name: string
           prefix: string
           revoked_at?: string | null
+          scopes?: string[]
           token_hash: string
           user_id?: string
         }
@@ -101,7 +106,152 @@ export type Database = {
           name?: string
           prefix?: string
           revoked_at?: string | null
+          scopes?: string[]
           token_hash?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      budget_periods: {
+        Row: {
+          cap_cents: number
+          created_at: string
+          end_date: string
+          id: string
+          month: string
+          name: string
+          start_date: string
+          user_id: string
+        }
+        Insert: {
+          cap_cents: number
+          created_at?: string
+          end_date: string
+          id?: string
+          month: string
+          name: string
+          start_date: string
+          user_id?: string
+        }
+        Update: {
+          cap_cents?: number
+          created_at?: string
+          end_date?: string
+          id?: string
+          month?: string
+          name?: string
+          start_date?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      oauth_codes: {
+        Row: {
+          client_id: string
+          client_name: string
+          code_challenge: string
+          code_hash: string
+          created_at: string
+          expires_at: string
+          redirect_uri: string
+          resource: string
+          scopes: string[]
+          used_at: string | null
+          user_id: string
+        }
+        Insert: {
+          client_id: string
+          client_name: string
+          code_challenge: string
+          code_hash: string
+          created_at?: string
+          expires_at: string
+          redirect_uri: string
+          resource: string
+          scopes: string[]
+          used_at?: string | null
+          user_id?: string
+        }
+        Update: {
+          client_id?: string
+          client_name?: string
+          code_challenge?: string
+          code_hash?: string
+          created_at?: string
+          expires_at?: string
+          redirect_uri?: string
+          resource?: string
+          scopes?: string[]
+          used_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      oauth_grants: {
+        Row: {
+          client_hash: string
+          client_name: string
+          created_at: string
+          id: string
+          last_used_at: string | null
+          redirect_host: string
+          resource: string
+          revoked_at: string | null
+          scopes: string[]
+          user_id: string
+        }
+        Insert: {
+          client_hash: string
+          client_name: string
+          created_at?: string
+          id?: string
+          last_used_at?: string | null
+          redirect_host: string
+          resource: string
+          revoked_at?: string | null
+          scopes: string[]
+          user_id?: string
+        }
+        Update: {
+          client_hash?: string
+          client_name?: string
+          created_at?: string
+          id?: string
+          last_used_at?: string | null
+          redirect_host?: string
+          resource?: string
+          revoked_at?: string | null
+          scopes?: string[]
+          user_id?: string
+        }
+        Relationships: []
+      }
+      oauth_tokens: {
+        Row: {
+          created_at: string
+          expires_at: string
+          grant_id: string
+          kind: string
+          token_hash: string
+          used_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          grant_id: string
+          kind: string
+          token_hash: string
+          used_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          grant_id?: string
+          kind?: string
+          token_hash?: string
+          used_at?: string | null
           user_id?: string
         }
         Relationships: []
@@ -520,6 +670,7 @@ export type Database = {
           created_at: string
           description: string
           external_id: string | null
+          idempotency_key: string | null
           id: string
           method: Database["public"]["Enums"]["payment_method"]
           occurred_on: string
@@ -549,6 +700,7 @@ export type Database = {
           created_at?: string
           description: string
           external_id?: string | null
+          idempotency_key?: string | null
           id?: string
           method: Database["public"]["Enums"]["payment_method"]
           occurred_on: string
@@ -578,6 +730,7 @@ export type Database = {
           created_at?: string
           description?: string
           external_id?: string | null
+          idempotency_key?: string | null
           id?: string
           method?: Database["public"]["Enums"]["payment_method"]
           occurred_on?: string
@@ -599,6 +752,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      hit_rate_limit: {
+        Args: { p_user: string; p_key: string; p_limit: number }
+        Returns: boolean
+      }
       apply_auto_decisions: {
         Args: { rows: Json }
         Returns: number

@@ -1,4 +1,4 @@
-import { allocateBySequence, coveredSeedInstallments, synthesizeInstallments, txInvoiceMonth, type CardTx } from "./cards";
+import { allocateBySequence, coveredSeedInstallments, repairSeries, synthesizeInstallments, txInvoiceMonth, type CardTx } from "./cards";
 import { addMonths, lastDayOfMonth, monthsBetween } from "./dates";
 import { countsInDaily, dailySplit, installmentAmountInMonth, type BudgetLike, type InstallmentLike, type TransactionLike } from "./projection";
 import { subscriptionKey } from "./subscriptions";
@@ -86,7 +86,10 @@ export function prepareInvoices(p: Omit<InvoiceParams, "month">) {
     pluggy_bill_id: t.pluggy_bill_id ?? null,
   });
   const bankCardTx = p.transactions.filter((t) => t.account_id && linked.has(t.account_id) && !t.is_inflow && t.bucket !== "ignorar");
-  const cardRows = bankCardTx.map((t) => ({ ...asCard(t), bucket: t.bucket, auto_reason: t.auto_reason ?? null, pending: t.pluggy_status === "PENDING" }));
+  const rawRows = bankCardTx.map((t) => ({ ...asCard(t), bucket: t.bucket, auto_reason: t.auto_reason ?? null, pending: t.pluggy_status === "PENDING" }));
+  // n/total errado do banco ("5/1") vira a continuação da série ("5/6")
+  const repaired = repairSeries(rawRows);
+  const cardRows = rawRows.map((t) => (repaired.has(t.id) ? { ...t, ...repaired.get(t.id)! } : t));
   const byDate = (t: CardTx) => {
     const c = linked.get(t.account_id!);
     return txInvoiceMonth(t, c ? { closing_day: c.closing_day ?? null, due_day: c.due_day ?? null } : undefined, billDue);

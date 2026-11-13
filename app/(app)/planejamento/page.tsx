@@ -1,10 +1,10 @@
 import { Suspense } from "react";
 import { connection } from "next/server";
-import { CalendarCog, Coffee, Receipt, SlidersHorizontal, Wallet } from "lucide-react";
+import { CalendarCog, Coffee, Plane, Receipt, SlidersHorizontal, Wallet } from "lucide-react";
 import { MonthHeader } from "@/components/month-header";
 import { Money } from "@/components/money";
 import { Panel } from "@/components/panel";
-import { BudgetEditor, CopyPrevButton, FixedEditor, IncomesEditor, PreferencesEditor } from "@/components/plan/plan-editors";
+import { BudgetEditor, CopyPrevButton, FixedEditor, IncomesEditor, PeriodsEditor, PreferencesEditor } from "@/components/plan/plan-editors";
 import { bucketLabels } from "@/lib/labels";
 import { addMonths, formatMonthLong, monthOf, todayISO } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
@@ -14,12 +14,13 @@ import { isMonth } from "@/lib/validate";
 async function Content({ month }: { month: string }) {
   await connection();
   const supabase = await createClient();
-  const [{ data: incomes }, { data: fixed }, { data: budget }, { data: cards }, { data: settings }] = await Promise.all([
+  const [{ data: incomes }, { data: fixed }, { data: budget }, { data: cards }, { data: settings }, { data: periods }] = await Promise.all([
     supabase.from("incomes").select("id, description, kind, amount_cents").eq("month", month).order("amount_cents", { ascending: false }),
     supabase.from("fixed_expenses").select("id, name, category, account_id, amount_cents").eq("month", month),
     supabase.from("monthly_budgets").select("id, cap_cents, method, control_start, budget_allocations(bucket, amount_cents)").eq("month", month).maybeSingle(),
     supabase.from("accounts").select("id, name").eq("kind", "credit_card").order("name"),
     supabase.from("settings").select("label_lazer, label_mercado, self_names, self_tax_ids").maybeSingle(),
+    supabase.from("budget_periods").select("id, name, start_date, end_date, cap_cents").eq("month", month).order("start_date"),
   ]);
   const labels = bucketLabels(settings);
   const totalIn = (incomes ?? []).reduce((s, i) => s + i.amount_cents, 0);
@@ -87,6 +88,10 @@ async function Content({ month }: { month: string }) {
                 : null
             }
           />
+        </Panel>
+
+        <Panel title="Períodos especiais" subtitle="viagem, feriado… com teto próprio dentro do teto do mês" icon={Plane}>
+          <PeriodsEditor month={month} rows={periods ?? []} capCents={budget?.cap_cents ?? null} />
         </Panel>
 
         <Panel title="Preferências" subtitle="nomes do dia a dia e quem é você nos extratos" icon={SlidersHorizontal}>

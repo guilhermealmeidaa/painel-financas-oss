@@ -13,7 +13,7 @@ import { SaldoCard } from "@/components/home/saldo-card";
 import { MonthHeader } from "@/components/month-header";
 import { Panel } from "@/components/panel";
 import { billsForMonth } from "@/lib/bills";
-import { monthStatus, remainingWeekends } from "@/lib/budget";
+import { budgetStatus, upcomingWeekends, weekendInPeriods } from "@/lib/budget";
 import { invoiceInputs, loadAll, runProjection, type AllData } from "@/lib/data";
 import { addMonths, formatMonthLong, monthOf, todayISO } from "@/lib/dates";
 import { invoicesForMonth } from "@/lib/invoices";
@@ -37,23 +37,12 @@ export default async function HomePage(props: PageProps<"/">) {
 
   const asked = typeof sp.mes === "string" && /^\d{4}-\d{2}-01$/.test(sp.mes) ? sp.mes : current;
   const month = asked < first ? first : asked > last ? last : asked;
-  const isCurrent = month === current;
   const rowIdx = rows.findIndex((r) => r.month === month);
   const row = rows[rowIdx];
   const prevBalance = rowIdx > 0 ? rows[rowIdx - 1].balance : (data.settings?.opening_balance_cents ?? 0);
 
   const budget = data.budgets.find((b) => b.month === month);
-  const status = budget
-    ? monthStatus({
-        today,
-        month,
-        controlStart: budget.control_start,
-        capCents: budget.cap_cents,
-        allocations: budget.allocations,
-        transactions: data.transactions,
-        skippedWeekends: budget.skipped_weekends,
-      })
-    : null;
+  const status = budget ? budgetStatus(budget, data.transactions, today) : null;
 
   const { bills } = billsForMonth({ ...invoiceInputs(data), month, payments: data.payments });
 
@@ -133,8 +122,7 @@ export default async function HomePage(props: PageProps<"/">) {
               <DiaADiaCard
                 status={status}
                 method={budget.method}
-                isCurrent={isCurrent}
-                allWeekends={isCurrent ? remainingWeekends(today) : []}
+                allWeekends={upcomingWeekends(month, today).filter((d) => !weekendInPeriods(d, budget.periods ?? []))}
                 skipped={budget.skipped_weekends}
                 items={monthTx}
                 labels={bucketLabels(data.settings)}

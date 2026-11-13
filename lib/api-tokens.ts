@@ -15,18 +15,18 @@ export function hashToken(token: string) {
 }
 
 /** Valida um token de API e devolve o dono. Atualiza last_used_at (no máximo 1x por minuto). */
-export async function verifyApiToken(token: string | undefined): Promise<{ userId: string; tokenId: string } | null> {
+export async function verifyApiToken(token: string | undefined): Promise<{ userId: string; tokenId: string; scopes: string[] } | null> {
   if (!token || !token.startsWith(PREFIX) || token.length < 40 || token.length > 100) return null;
   const admin = createAdminClient();
   if (!admin) return null;
   const { data } = await admin
     .from("api_tokens")
-    .select("id, user_id, revoked_at, last_used_at")
+    .select("id, user_id, revoked_at, last_used_at, scopes")
     .eq("token_hash", hashToken(token))
     .maybeSingle();
   if (!data || data.revoked_at) return null;
   if (!data.last_used_at || Date.now() - Date.parse(data.last_used_at) > 60_000) {
     await admin.from("api_tokens").update({ last_used_at: new Date().toISOString() }).eq("id", data.id);
   }
-  return { userId: data.user_id, tokenId: data.id };
+  return { userId: data.user_id, tokenId: data.id, scopes: data.scopes };
 }

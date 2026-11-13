@@ -489,3 +489,96 @@ export function PreferencesEditor({
     </form>
   );
 }
+
+// ---------- Períodos especiais ----------
+
+export interface PeriodRow {
+  id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  cap_cents: number;
+}
+
+const br = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+
+export function PeriodsEditor({ month, rows, capCents }: { month: string; rows: PeriodRow[]; capCents: number | null }) {
+  const router = useRouter();
+  const [form, setForm] = useState({ name: "Viagem", start: "", end: "", cap: "" });
+  const reserved = rows.reduce((s, r) => s + r.cap_cents, 0);
+  const last = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    const cap = parseBRLToCents(form.cap);
+    if (cap == null) return toast.error("Teto inválido");
+    try {
+      await send("/api/budget-periods", "POST", { name: form.name, start_date: form.start, end_date: form.end || form.start, cap_cents: cap });
+      toast.success("Período criado");
+      setForm({ name: "Viagem", start: "", end: "", cap: "" });
+      router.refresh();
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
+  async function remove(id: string) {
+    try {
+      await send(`/api/budget-periods/${id}`, "DELETE");
+      toast.success("Período removido");
+      router.refresh();
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
+  if (capCents == null) return <p className="text-sm text-muted-foreground">Cadastre o teto do dia a dia do mês primeiro.</p>;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <ul className="divide-y divide-border">
+        {rows.length === 0 && <li className="py-2 text-sm text-muted-foreground">Nenhum período neste mês.</li>}
+        {rows.map((r) => (
+          <li key={r.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+            <span>
+              <span className="font-medium">{r.name}</span>{" "}
+              <span className="text-muted-foreground">
+                {br(r.start_date)}–{br(r.end_date)}
+              </span>
+            </span>
+            <span className="flex items-center gap-3">
+              <span className="tabular-nums">{formatBRL(r.cap_cents)}</span>
+              <button type="button" onClick={() => remove(r.id)} className="text-muted-foreground hover:text-destructive" aria-label={`Remover ${r.name}`}>
+                <Trash2 className="size-4" />
+              </button>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {rows.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Reservado: {formatBRL(reserved)} de {formatBRL(capCents)}. Sobra {formatBRL(capCents - reserved)} para os fins de semana normais.
+        </p>
+      )}
+      <form onSubmit={add} className="grid grid-cols-2 gap-2 rounded-2xl bg-muted/60 p-3">
+        <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Nome (ex.: Viagem)" className="col-span-2 h-10" maxLength={60} />
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          De
+          <input type="date" required min={month} max={last} value={form.start} onChange={(e) => setForm({ ...form, start: e.target.value })} className={inputCls} />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          Até
+          <input type="date" min={form.start || month} max={last} value={form.end} onChange={(e) => setForm({ ...form, end: e.target.value })} className={inputCls} />
+        </label>
+        <Input value={form.cap} onChange={(e) => setForm({ ...form, cap: e.target.value })} placeholder="Teto do período (0,00)" inputMode="decimal" className="col-span-2 h-10" />
+        <Button type="submit" className="col-span-2 h-10" disabled={!form.start || !form.name.trim()}>
+          <Plus className="size-4" /> Adicionar período
+        </Button>
+      </form>
+      <p className="text-xs text-muted-foreground">
+        O teto do período sai de dentro do teto do mês (a projeção não muda). Gastos do dia a dia com data no período contam nele, e os fins de
+        semana do período saem do ritmo.
+      </p>
+    </div>
+  );
+}

@@ -69,13 +69,54 @@ export function txInvoiceMonth(
  * parcela muda todo mês por causa dos juros ("FARMACIA 3/8" 24,24 → "4/8" 26,91 → "5/8" 29,86
  * é UMA compra só). O mês de origem separa duas compras iguais feitas em meses diferentes.
  */
-export function purchaseKey(t: CardTx): string | null {
-  if (!t.account_id || !t.total_installments || t.total_installments < 2 || !t.installment_number) return null;
-  const base = t.description
+/** Descrição sem o "n/total" do fim, minúscula e com espaços normalizados (identifica a compra). */
+export function baseDescription(description: string): string {
+  return description
     .replace(/\s*(parc(ela)?\.?\s*)?\d{1,2}\s*\/\s*\d{1,2}\s*$/i, "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ");
+}
+
+/** n/total válido: 1 ≤ n ≤ total e total ≥ 2. */
+const validSeries = (t: { installment_number: number | null; total_installments: number | null }) =>
+  Boolean(t.installment_number && t.total_installments && t.total_installments >= 2 && t.installment_number >= 1 && t.installment_number <= t.total_installments);
+
+/**
+ * Parcela que o banco mandou com n/total faltando ou errado (ex.: o banco mandou "5/1" e "6/1" para a
+ * continuação de "3/6" e "4/6"), mas que continua uma série: mesmo cartão, mesma descrição base e
+ * valor a ±1% de uma parcela com n/total válido. Devolve, por id, o n/total corrigido.
+ * Sem n: usa a última parcela válida + os meses de distância. n além do total: não é da série.
+ */
+export function repairSeries<T extends CardTx>(rows: T[]): Map<string, { installment_number: number; total_installments: number }> {
+  const out = new Map<string, { installment_number: number; total_installments: number }>();
+  const valid = rows.filter((r) => r.account_id && validSeries(r));
+  for (const t of rows) {
+    if (!t.account_id || validSeries(t)) continue;
+    const base = baseDescription(t.description);
+    const series = valid
+      .filter(
+        (v) =>
+          v.account_id === t.account_id &&
+          v.id !== t.id &&
+          baseDescription(v.description) === base &&
+          Math.abs(v.amount_cents - t.amount_cents) <= Math.max(1, Math.round(v.amount_cents * 0.01)) &&
+          v.occurred_on < t.occurred_on,
+      )
+      .sort((a, b) => b.occurred_on.localeCompare(a.occurred_on));
+    const last = series[0];
+    if (!last) continue;
+    const total = last.total_installments!;
+    const n = t.installment_number && t.installment_number > last.installment_number! ? t.installment_number : last.installment_number! + Math.max(1, monthsBetween(monthOf(last.occurred_on), monthOf(t.occurred_on)));
+    if (n > total) continue;
+    out.set(t.id, { installment_number: n, total_installments: total });
+  }
+  return out;
+}
+
+export function purchaseKey(t: CardTx): string | null {
+  if (!t.account_id || !t.total_installments || t.total_installments < 2 || !t.installment_number) return null;
+  const base = baseDescription(t.description);
   const origin = addMonths(monthOf(t.occurred_on), 1 - t.installment_number);
   return `${t.account_id}|${base}|${t.total_installments}|${origin}`;
 }
@@ -215,16 +256,29 @@ export function synthesizeInstallments(
  * Fatura paga: soma dos pagamentos recebidos no cartão entre o fechamento (ou 25 dias antes do
  * vencimento) e 5 dias depois do vencimento cobre o valor (tolerância de R$ 1).
  */
+/**
+ * Pagamentos que pagam uma fatura: do dia seguinte ao vencimento da fatura anterior até 5 dias depois
+ * do vencimento desta. Inclui pagamentos ANTES do fechamento (ex.: fatura de nov: 2.000,00 em 05/11 + 150,00
+ * em 10/11). Começa depois do vencimento anterior para não contar o pagamento da fatura anterior.
+ * Sem a fatura anterior: 1 mês antes do vencimento.
+ */
+export function billCyclePayments<P extends { id: string; occurred_on: string; amount_cents: number }>(
+  bill: { due_date: string },
+  previousDue: string | null,
+  payments: P[],
+): P[] {
+  const from = previousDue ? addDays(previousDue, 1) : addDays(shiftDate(bill.due_date, -1), 1);
+  const to = addDays(bill.due_date, 5);
+  return payments.filter((p) => p.occurred_on >= from && p.occurred_on <= to).sort((a, b) => a.occurred_on.localeCompare(b.occurred_on));
+}
+
 export function billPayment(
   bill: { total_cents: number; due_date: string; closing_date: string | null },
   payments: { id: string; occurred_on: string; amount_cents: number }[],
+  previousDue: string | null = null,
 ): { paid: boolean; paid_cents: number; payment_tx_id: string | null; paid_on: string | null } {
   if (bill.total_cents <= 0) return { paid: true, paid_cents: 0, payment_tx_id: null, paid_on: null };
-  const from = bill.closing_date ?? addDays(bill.due_date, -25);
-  const to = addDays(bill.due_date, 5);
-  const inWindow = payments
-    .filter((p) => p.occurred_on >= from && p.occurred_on <= to)
-    .sort((a, b) => a.occurred_on.localeCompare(b.occurred_on));
+  const inWindow = billCyclePayments(bill, previousDue, payments);
   const paid_cents = inWindow.reduce((s, p) => s + p.amount_cents, 0);
   const paid = paid_cents >= bill.total_cents - 100;
   const last = inWindow.at(-1);
