@@ -36,6 +36,15 @@ O painel tem o próprio servidor de autorização OAuth 2.1 (PKCE S256, registro
 
 > Opcional: defina `OAUTH_SECRET` (32+ caracteres) no servidor. Sem ela, a chave que assina os clientes é derivada da `SUPABASE_SERVICE_ROLE_KEY`; trocar essa chave obriga a reconectar o conector.
 
+## Atalhos do iPhone (Siri)
+
+Duas rotas simples, com o mesmo token `pf_…`, respondem em texto pronto para a Siri falar:
+
+- `GET /api/atalhos/resumo`: "Ainda dá para gastar R$ X em novembro. R$ Y por fim de semana (…)."
+- `POST /api/atalhos/gasto` com JSON `{ "valor": "30,50", "descricao": "almoço", "categoria"?: "lazer", "meio"?: "pix", "chave"?: "…" }`: lança um gasto manual (exige token com "Permitir lançar gastos") e responde o novo "ainda posso gastar".
+
+Com `?formato=json` as duas devolvem JSON. O passo a passo para montar os atalhos está na tela **Acesso do Claude**.
+
 ## 1. Gerar o token (Claude Code e outros clientes)
 
 No painel, abra **Acesso do Claude**, dê um nome (ex.: “Claude Code”) e gere o token. Marque “Permitir lançar gastos” se quiser liberar o `lancar_gasto`. Ele aparece uma vez só: copie. Na mesma tela dá para revogar.

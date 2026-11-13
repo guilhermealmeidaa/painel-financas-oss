@@ -123,7 +123,7 @@ const KNOWN: { re: RegExp; name: string; variable?: boolean }[] = [
 const NOT_SUB = /\biof\b|transfer|pix|pagamento|pagto|fatura|juros|estorno|saque/;
 const lower = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 /** Chave de um comerciante desconhecido: sem prefixos de adquirente ("dm*", "ec *") e sem números/cidade. */
-const genericKey = (d: string) =>
+export const genericKey = (d: string) =>
   lower(d)
     .replace(/^[a-z]{1,3}\s*\*\s*/, "")
     .replace(/sao paulo|bra\b|br\b/g, " ")

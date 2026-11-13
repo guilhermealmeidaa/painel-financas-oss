@@ -35,7 +35,7 @@ async function TopBarWithCount() {
 export default function AppLayout({ children }: LayoutProps<"/">) {
   return (
     <LabelsProvider labels={chromeData().then((d) => d.labels)}>
-    <div className="mx-auto flex max-w-[1440px] gap-4 p-3 sm:p-4">
+    <div className="mx-auto flex max-w-[1440px] gap-4 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] pr-[max(0.75rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] sm:p-4 sm:pt-[max(1rem,env(safe-area-inset-top))]">
       <Suspense fallback={<div className="hidden w-[232px] shrink-0 lg:block" />}>
         <SidebarWithUser />
       </Suspense>

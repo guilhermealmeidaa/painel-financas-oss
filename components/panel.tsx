@@ -46,9 +46,9 @@ export function Panel({
             {title && <h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>}
             {subtitle && <p className="mt-0.5 text-[12.5px] text-muted-foreground">{subtitle}</p>}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {action}
-            {icon && <IconBadge icon={icon} className={iconClass} />}
+            {icon && <IconBadge icon={icon} className={cn(action && "hidden sm:grid", iconClass)} />}
           </div>
         </header>
       )}

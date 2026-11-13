@@ -37,7 +37,7 @@ export function Sidebar({ email, triageCount }: { email: string; triageCount: nu
   };
 
   return (
-    <aside className="surface sticky top-4 hidden h-[calc(100dvh-2rem)] w-[232px] shrink-0 flex-col p-3 lg:flex">
+    <aside className="print:hidden surface sticky top-4 hidden h-[calc(100dvh-2rem)] w-[232px] shrink-0 flex-col p-3 lg:flex">
       <div className="flex items-center gap-2.5 px-2 pt-2 pb-6">
         <BrandMark />
         <div className="leading-tight">

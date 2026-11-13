@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { OnboardingBanner } from "@/components/home/onboarding-banner";
 import { redirect } from "next/navigation";
 import { DEMO } from "@/lib/demo-flag";
-import { Inbox, Receipt } from "lucide-react";
+import { Inbox, Receipt, TriangleAlert } from "lucide-react";
 import { CartoesCard } from "@/components/home/cartoes-card";
 import { ContasCard } from "@/components/home/contas-card";
 import { DiaADiaCard } from "@/components/home/dia-a-dia-card";
@@ -20,6 +20,8 @@ import { invoicesForMonth } from "@/lib/invoices";
 import { installmentAmountInMonth } from "@/lib/projection";
 import { bucketLabels } from "@/lib/labels";
 import { formatBRL } from "@/lib/money";
+import { InstallTip, OfflineBanner } from "@/components/pwa";
+import { findAnomalies } from "@/lib/anomalies";
 
 function invoiceFor(data: AllData, month: string) {
   return invoicesForMonth({ ...invoiceInputs(data), month });
@@ -30,6 +32,7 @@ export default async function HomePage(props: PageProps<"/">) {
   const data = await loadAll();
   if (!data.settings && !DEMO) redirect("/primeiros-passos");
   const today = todayISO();
+  const recentAnomalies = findAnomalies(data.transactions, today, 7).length;
   const current = monthOf(today);
   const rows = runProjection(data);
   const first = rows[0]?.month ?? current;
@@ -80,6 +83,19 @@ export default async function HomePage(props: PageProps<"/">) {
   return (
     <>
       <MonthHeader month={month} basePath="/" min={first} max={last} current={current} />
+      <OfflineBanner renderedAt={new Date().toISOString()} />
+      {recentAnomalies > 0 && (
+        <Link href="/saude-dos-dados#fora-do-padrao" className="surface flex items-center gap-3 px-5 py-3 text-[13px] hover:bg-muted/40">
+          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-warning/15 text-warning">
+            <TriangleAlert className="size-3.5" />
+          </span>
+          <span className="flex-1">
+            {recentAnomalies === 1 ? "1 gasto fora do padrão" : `${recentAnomalies} gastos fora do padrão`} nos últimos 7 dias
+          </span>
+          <span className="font-semibold text-primary">Ver</span>
+        </Link>
+      )}
+      <InstallTip />
 
       {!DEMO && (
         <Suspense fallback={null}>

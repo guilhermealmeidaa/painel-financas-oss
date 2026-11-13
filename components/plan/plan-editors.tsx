@@ -268,7 +268,7 @@ export function FixedEditor({ month, rows, cards }: { month: string; rows: Fixed
         <select
           value={form.category}
           onChange={(e) => setForm({ ...form, category: e.target.value as FixedRow["category"] })}
-          className={inputCls}
+          className={cn(inputCls, "col-span-2 sm:col-span-1")}
           aria-label="Categoria"
         >
           {Object.entries(CAT_LABEL).map(([k, v]) => (
@@ -373,7 +373,7 @@ export function BudgetEditor({
               method === m ? "border-primary bg-primary/10 font-medium text-primary" : "border-border text-muted-foreground",
             )}
           >
-            {m === "credito" ? "No crédito (vai pra fatura)" : "Débito/Pix"}
+            {m === "credito" ? "Crédito (na fatura)" : "Débito/Pix"}
           </button>
         ))}
       </div>

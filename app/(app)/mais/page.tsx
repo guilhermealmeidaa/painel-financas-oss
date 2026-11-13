@@ -3,7 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { PageHeader } from "@/components/month-header";
 import { NAV_ITEMS, OPEN_FINANCE_ITEMS } from "@/components/nav-items";
 
-const MOBILE_HIDDEN = ["/parcelas", "/historico", "/assinaturas"];
+const MOBILE_HIDDEN = ["/plano", "/calendario", "/parcelas", "/historico", "/assinaturas", "/relatorio"];
 
 /** No celular, o que não cabe na barra de baixo. */
 export default function MaisPage() {

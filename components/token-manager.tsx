@@ -28,6 +28,32 @@ async function copy(text: string) {
   }
 }
 
+function TokenItem({ t, onRevoke }: { t: TokenRow; onRevoke?: () => void }) {
+  return (
+    <li className="flex items-center justify-between gap-3 py-2.5">
+      <div className="min-w-0">
+        <p className={t.revoked_at ? "text-muted-foreground line-through" : "font-medium"}>
+          {t.name}{" "}
+          <span className={`ml-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap ${t.scopes.includes("write") ? "bg-warning/20" : "bg-muted text-muted-foreground"}`}>
+            {t.scopes.includes("write") ? "leitura + lançar gastos" : "só leitura"}
+          </span>
+        </p>
+        <p className="text-xs text-muted-foreground">
+          <span className="font-mono">{t.prefix}…</span> · criado {dt.format(new Date(t.created_at))} · último uso{" "}
+          {t.last_used_at ? dt.format(new Date(t.last_used_at)) : "nunca"}
+        </p>
+      </div>
+      {onRevoke ? (
+        <button type="button" onClick={onRevoke} className="shrink-0 text-xs text-destructive hover:underline">
+          Revogar
+        </button>
+      ) : (
+        <span className="shrink-0 text-xs text-muted-foreground">revogado</span>
+      )}
+    </li>
+  );
+}
+
 export function TokenManager({ tokens, mcpUrl }: { tokens: TokenRow[]; mcpUrl: string }) {
   const router = useRouter();
   const [name, setName] = useState("Claude Code");
@@ -57,6 +83,9 @@ export function TokenManager({ tokens, mcpUrl }: { tokens: TokenRow[]; mcpUrl: s
     else toast.success("Token revogado");
     router.refresh();
   }
+
+  const active = tokens.filter((t) => !t.revoked_at);
+  const revoked = tokens.filter((t) => t.revoked_at);
 
   const command = created
     ? `claude mcp add --scope user --transport http financas ${mcpUrl} --header "Authorization: Bearer ${created}"`
@@ -103,31 +132,21 @@ export function TokenManager({ tokens, mcpUrl }: { tokens: TokenRow[]; mcpUrl: s
       )}
 
       <ul className="divide-y divide-border text-sm">
-        {tokens.length === 0 && <li className="py-2 text-muted-foreground">Nenhum token ainda.</li>}
-        {tokens.map((t) => (
-          <li key={t.id} className="flex items-center justify-between gap-3 py-2.5">
-            <div className="min-w-0">
-              <p className={t.revoked_at ? "text-muted-foreground line-through" : "font-medium"}>
-                {t.name}{" "}
-                <span className={`ml-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${t.scopes.includes("write") ? "bg-warning/20" : "bg-muted text-muted-foreground"}`}>
-                  {t.scopes.includes("write") ? "leitura + lançar gastos" : "só leitura"}
-                </span>
-              </p>
-              <p className="text-xs text-muted-foreground">
-                <span className="font-mono">{t.prefix}…</span> · criado {dt.format(new Date(t.created_at))} · último uso{" "}
-                {t.last_used_at ? dt.format(new Date(t.last_used_at)) : "nunca"}
-              </p>
-            </div>
-            {t.revoked_at ? (
-              <span className="text-xs text-muted-foreground">revogado</span>
-            ) : (
-              <button type="button" onClick={() => revoke(t.id)} className="text-xs text-destructive hover:underline">
-                Revogar
-              </button>
-            )}
-          </li>
+        {active.length === 0 && <li className="py-2 text-muted-foreground">Nenhum token ativo.</li>}
+        {active.map((t) => (
+          <TokenItem key={t.id} t={t} onRevoke={() => revoke(t.id)} />
         ))}
       </ul>
+      {revoked.length > 0 && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-xs text-muted-foreground">Revogados ({revoked.length})</summary>
+          <ul className="mt-1 divide-y divide-border">
+            {revoked.map((t) => (
+              <TokenItem key={t.id} t={t} />
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }

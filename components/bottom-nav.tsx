@@ -12,7 +12,7 @@ export function BottomNav() {
   return (
     <nav
       aria-label="Navegação"
-      className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-3 right-[5.25rem] z-30 rounded-full bg-nav p-1.5 shadow-lg ring-1 ring-border backdrop-blur-md lg:hidden"
+      className="print:hidden fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-3 right-[5.25rem] z-30 rounded-full bg-nav p-1.5 shadow-lg ring-1 ring-border backdrop-blur-md lg:hidden"
     >
       <ul className="grid grid-flow-col auto-cols-fr">
         {MOBILE_ITEMS.filter((i) => !DEMO || DEMO_PAGES.includes(i.href)).map(({ href, label, icon: Icon }) => {

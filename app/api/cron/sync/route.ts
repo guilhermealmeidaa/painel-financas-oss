@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/database.types";
 import { pluggyConfigured } from "@/lib/pluggy/client";
 import { syncUser } from "@/lib/pluggy/sync";
+import { runAlerts } from "@/lib/notify-run";
 
 export const maxDuration = 60;
 
@@ -34,11 +35,18 @@ export async function GET(request: Request) {
   const users = [...new Set((rows ?? []).map((r) => r.user_id))];
   let items = 0;
   let failures = 0;
+  let alerts = 0;
   for (const userId of users) {
     const res = await syncUser(admin, userId);
     items += res.length;
     failures += res.filter((r) => r.error).length;
+    // depois do sync: fotos do mês (Plano) e alertas por push, cada um uma vez só
+    try {
+      alerts += await runAlerts(admin, userId);
+    } catch (err) {
+      console.error(JSON.stringify({ evt: "alertas_falharam", msg: (err as Error).message.slice(0, 120) }));
+    }
   }
   // Também mantém o Supabase free ativo (evita pausa por inatividade).
-  return NextResponse.json({ users: users.length, items, failures });
+  return NextResponse.json({ users: users.length, items, failures, alerts });
 }

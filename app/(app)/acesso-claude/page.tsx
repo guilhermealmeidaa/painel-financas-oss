@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { connection } from "next/server";
 import { headers } from "next/headers";
-import { Bot, Plug, ShieldCheck } from "lucide-react";
+import { Bot, Plug, ShieldCheck, Smartphone } from "lucide-react";
 import { PageHeader } from "@/components/month-header";
 import { Panel } from "@/components/panel";
 import { OAuthGrants } from "@/components/oauth-grants";
@@ -27,7 +27,8 @@ async function Content() {
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  const mcpUrl = `${proto}://${host}/api/mcp`;
+  const base = `${proto}://${host}`;
+  const mcpUrl = `${base}/api/mcp`;
   const [{ data: tokens }, { data: grants }] = await Promise.all([
     supabase.from("api_tokens").select("id, name, prefix, created_at, last_used_at, revoked_at, scopes").order("created_at", { ascending: false }),
     supabase.from("oauth_grants").select("id, client_name, redirect_host, scopes, created_at, last_used_at, revoked_at").order("created_at", { ascending: false }).limit(30),
@@ -43,6 +44,50 @@ async function Content() {
           </p>
         )}
         <TokenManager tokens={tokens ?? []} mcpUrl={mcpUrl} />
+      </Panel>
+
+      <Panel title="Atalhos do iPhone (Siri)" subtitle="pergunte o saldo e lance gastos por voz ou por um widget" icon={Smartphone}>
+        <p className="text-sm text-muted-foreground">
+          Gere acima um token chamado &quot;Atalhos iPhone&quot; com <strong>Permitir lançar gastos</strong> marcado. Depois, no app <strong>Atalhos</strong>:
+        </p>
+        <div className="flex flex-col gap-3 text-sm">
+          <div className="rounded-2xl bg-muted/60 p-3">
+            <p className="font-medium">Quanto posso gastar</p>
+            <ol className="mt-1 list-decimal space-y-1 pl-5 text-muted-foreground">
+              <li>Novo atalho → ação <strong>Obter conteúdo do URL</strong>.</li>
+              <li>
+                URL <code className="rounded bg-card px-1 py-0.5 text-xs break-all">{base}/api/atalhos/resumo</code>
+              </li>
+              <li>
+                Em Cabeçalhos: <code className="text-xs">Authorization</code> = <code className="text-xs">Bearer pf_SEU_TOKEN</code>.
+              </li>
+              <li>Ação <strong>Falar texto</strong> (ou Mostrar resultado) com o conteúdo do URL.</li>
+            </ol>
+          </div>
+          <div className="rounded-2xl bg-muted/60 p-3">
+            <p className="font-medium">Lançar gasto</p>
+            <ol className="mt-1 list-decimal space-y-1 pl-5 text-muted-foreground">
+              <li>
+                <strong>Pedir entrada</strong> (Número): &quot;Quanto?&quot; · <strong>Pedir entrada</strong> (Texto): &quot;Com o quê?&quot;
+              </li>
+              <li>
+                <strong>Obter conteúdo do URL</strong>: <code className="rounded bg-card px-1 py-0.5 text-xs break-all">{base}/api/atalhos/gasto</code>, método{" "}
+                <strong>POST</strong>, mesmo cabeçalho Authorization.
+              </li>
+              <li>
+                Corpo da solicitação <strong>JSON</strong>: <code className="text-xs">valor</code> = 1ª resposta, <code className="text-xs">descricao</code> = 2ª resposta.
+                Opcional: <code className="text-xs">categoria</code> (lazer, mercado, fixo, assinatura — ou os nomes que você deu) e <code className="text-xs">meio</code> (credito, debito, pix).
+              </li>
+              <li>
+                <strong>Falar texto</strong> com o resultado (&quot;Lançado: R$ 30,00 de almoço… Ainda dá para gastar…&quot;).
+              </li>
+            </ol>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Dê aos atalhos os nomes que quer falar (&quot;E aí Siri, quanto posso gastar&quot;). Para o widget: segure a tela de início → + → Atalhos. O lançamento é
+          igual ao &quot;+ Gasto&quot;: entra como manual hoje e se junta sozinho com a compra quando ela vier do banco.
+        </p>
       </Panel>
 
       <Panel title="Conector do claude.ai" subtitle={<span className="font-mono">{mcpUrl}</span>} icon={Plug}>

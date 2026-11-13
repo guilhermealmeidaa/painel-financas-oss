@@ -8,6 +8,10 @@ const nextConfig: NextConfig = {
   // Abrir o servidor de dev pelo celular na rede local: DEV_ORIGINS=192.168.0.10 (separe vários por vírgula).
   allowedDevOrigins: (process.env.DEV_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   cacheComponents: true,
+  // service worker sempre fresco (senão o celular demora a pegar a versão nova)
+  async headers() {
+    return [{ source: "/sw.js", headers: [{ key: "cache-control", value: "no-cache" }, { key: "content-type", value: "application/javascript; charset=utf-8" }] }];
+  },
   partialPrefetching: true,
   turbopack: {
     rules: {

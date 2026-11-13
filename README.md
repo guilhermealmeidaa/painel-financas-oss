@@ -60,6 +60,12 @@ Abra http://localhost:3000. Se faltar alguma chave do Supabase, o painel mostra 
 3. Faça o deploy. O [`vercel.json`](vercel.json) já agenda o sync 1 vez por dia (limite do plano grátis).
 4. **Sync a cada 3 horas (opcional):** o workflow [`.github/workflows/sync.yml`](.github/workflows/sync.yml) chama o sync pelo GitHub Actions. No seu repositório, em **Settings → Secrets and variables → Actions**, crie o segredo `CRON_SECRET` (mesmo valor da Vercel) e a variável `APP_URL` (ex.: `https://meu-painel.vercel.app`).
 
+## No celular
+
+Abra o painel no Safari (iPhone) ou Chrome (Android) e **adicione à tela de início**: ele abre em tela cheia, como um app, e sem internet mostra os últimos números da Visão geral. Para as **notificações**, gere as chaves com `npx web-push generate-vapid-keys`, coloque `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` e `APP_URL` no servidor e ative em **Notificações** (no iPhone, com o painel instalado). O resumo das 21h roda pelo mesmo workflow do sync.
+
+Também dá para usar a **Siri** com o app Atalhos: "quanto posso gastar?" e "lançar gasto". O passo a passo está em **Acesso do Claude**.
+
 ## Como usar
 
 | Tela | Para quê |
@@ -67,10 +73,15 @@ Abra http://localhost:3000. Se faltar alguma chave do Supabase, o painel mostra 
 | **Visão geral** | Saldo previsto, dia a dia, cartões, contas a pagar e próximos meses |
 | **Planejamento** | Entradas, fixos, teto do dia a dia e preferências (nomes das categorias, seu nome/CPF para reconhecer transferências suas) |
 | **Projeção** | Saldo no fim de cada mês, com a conta aberta linha a linha |
+| **Plano** | Quanto falta das dívidas (empréstimos, veículo, parcelas), quando você fica livre e planejado × realizado mês a mês |
+| **Calendário** | Faturas, fixos e entradas por dia, com o saldo previsto dia a dia e os dias que ficam negativos |
 | **Cartões** | Fatura de cada cartão: compras, parcelas e limite. Renomeie o cartão para o nome do banco (Nubank, Itaú, Inter…) e a logo aparece |
 | **Parcelas** | Compras parceladas planejadas e quanto da renda já está comprometido |
+| **Histórico** | Para onde foi o dinheiro, por categoria, comparado ao mês anterior até o mesmo dia |
+| **Relatório** | Plano × realizado do mês, categorias, maiores gastos e o que saiu do padrão; imprimir/PDF e CSV |
 | **Triagem** | O que o banco mandou sem categoria e tudo o que o painel decidiu sozinho, com o motivo |
 | **Conexões** | Conectar bancos, ligar cartões do banco aos seus e sincronizar agora |
+| **Notificações** | Avisos no celular: conta que o saldo não cobre, dia a dia no limite, banco sem atualizar, assinatura mais cara, gasto fora do padrão e o resumo das 21h |
 | **Acesso do Claude** | Conector do claude.ai (OAuth) ou token para o Claude Code: o Claude consulta as finanças e, se você permitir, lança gastos (veja [`docs/mcp.md`](docs/mcp.md)) |
 
 ## Faça do seu jeito

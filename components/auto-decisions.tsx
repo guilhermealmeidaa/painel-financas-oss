@@ -91,15 +91,15 @@ export function AutoDecisions({ items }: { items: AutoItem[] }) {
                     <li key={t.id} className="flex items-center gap-3 py-2 text-sm">
                       <span className="w-11 shrink-0 text-xs text-muted-foreground tabular-nums">{formatDay(t.occurred_on)}</span>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate">{t.description}</p>
-                        <p className="truncate text-xs text-muted-foreground">
+                        <p className="line-clamp-2 break-words">{t.description}</p>
+                        <p className="text-xs break-words text-muted-foreground">
                           → {labels[t.bucket]} · {reasonLabel(t.auto_reason)}
                           {t.fee_cents ? ` · taxa ${formatBRL(t.fee_cents)}` : ""}
                           {t.linked ? ` · ligado a “${t.linked}”` : ""}
                           {t.account ? ` · ${t.account}` : ""}
                         </p>
                       </div>
-                      <span className="tabular-nums">{formatBRL(t.amount_cents)}</span>
+                      <span className="shrink-0 whitespace-nowrap tabular-nums">{formatBRL(t.amount_cents)}</span>
                       <button type="button" onClick={() => undo(t)} className="p-1 text-muted-foreground hover:text-foreground" aria-label={`Desfazer ${t.description}`}>
                         <Undo2 className="size-4" />
                       </button>

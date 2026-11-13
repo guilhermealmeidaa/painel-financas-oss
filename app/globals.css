@@ -166,3 +166,11 @@
     @apply font-sans;
   }
 }
+/* safari-zoom: no iPhone, focar um campo com letra < 16px dá zoom na página */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

@@ -18,6 +18,7 @@ export interface ChartPoint {
 export function ProjectionChart({ points, minCents }: { points: ChartPoint[]; minCents: number }) {
   const data = points.map((p) => ({ ...p, reais: p.balance / 100 }));
   return (
+    <figure className="flex flex-col gap-1.5">
     <div className="h-64 w-full" role="img" aria-label="Saldo projetado no fim de cada mês">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap="30%">
@@ -34,7 +35,6 @@ export function ProjectionChart({ points, minCents }: { points: ChartPoint[]; mi
             y={minCents / 100}
             stroke={AXIS}
             strokeDasharray="4 4"
-            label={{ value: `mín. ${formatBRLShort(minCents)}`, position: "insideTopLeft", fill: AXIS, fontSize: 11 }}
           />
           <Tooltip
             cursor={{ fill: "var(--muted)" }}
@@ -51,5 +51,9 @@ export function ProjectionChart({ points, minCents }: { points: ChartPoint[]; mi
         </BarChart>
       </ResponsiveContainer>
     </div>
+    <figcaption className="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+      <span className="w-5 border-t border-dashed border-muted-foreground" aria-hidden /> mínimo de {formatBRLShort(minCents)} na conta
+    </figcaption>
+    </figure>
   );
 }

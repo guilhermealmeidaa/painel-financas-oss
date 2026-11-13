@@ -1,12 +1,14 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { connection } from "next/server";
-import { ArrowDownLeft, ArrowUpRight, History, PieChart } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, GitCompareArrows, History, PieChart } from "lucide-react";
 import { MonthHeader } from "@/components/month-header";
 import { Money } from "@/components/money";
 import { Panel } from "@/components/panel";
-import { addMonths, formatDay, formatMonthLong, monthOf, todayISO } from "@/lib/dates";
+import { addDays, addMonths, formatDay, formatMonthLong, monthOf, todayISO } from "@/lib/dates";
 import { monthHistory } from "@/lib/history";
+import { compareCategories, deltaLabel } from "@/lib/compare";
+import { cn } from "@/lib/utils";
 import { formatBRL } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 import { isMonth } from "@/lib/validate";
@@ -15,7 +17,13 @@ async function Content({ month }: { month: string }) {
   await connection();
   const supabase = await createClient();
   const next = addMonths(month, 1);
-  const [{ data: txs }, { data: accounts }, { data: bills }] = await Promise.all([
+  const prev = addMonths(month, -1);
+  // mês em andamento: compara com o mês anterior ATÉ O MESMO DIA (senão o mês atual sempre parece menor)
+  const today = todayISO();
+  const partial = month === monthOf(today);
+  const prevUntil = partial ? addDays(prev, Number(today.slice(8)) - 1) : addDays(month, -1);
+  const select = "occurred_on, description, amount_cents, method, is_inflow, bucket, pluggy_category, account_id, source, external_id";
+  const [{ data: txs }, { data: accounts }, { data: bills }, { data: prevTxs }] = await Promise.all([
     supabase
       .from("transactions")
       .select("occurred_on, description, amount_cents, method, is_inflow, bucket, pluggy_category, account_id, source, external_id")
@@ -24,11 +32,22 @@ async function Content({ month }: { month: string }) {
       .limit(5000),
     supabase.from("accounts").select("id, name, kind"),
     supabase.from("card_bills").select("account_id, due_date, total_cents").gte("due_date", month).lt("due_date", next),
+    supabase.from("transactions").select(select).gte("occurred_on", prev).lte("occurred_on", prevUntil).limit(5000),
   ]);
   const acc = new Map((accounts ?? []).map((a) => [a.id, a]));
   const h = monthHistory(
     (txs ?? []).map((t) => ({ ...t, account_kind: t.account_id ? (acc.get(t.account_id)?.kind ?? null) : null })),
   );
+  const hp = monthHistory((prevTxs ?? []).map((t) => ({ ...t, account_kind: t.account_id ? (acc.get(t.account_id)?.kind ?? null) : null })));
+  // mês em andamento: compara só até hoje (compras com data futura, como parcelas, ficam de fora dos dois lados)
+  const hNow = partial ? monthHistory((txs ?? []).filter((t) => t.occurred_on <= today).map((t) => ({ ...t, account_kind: t.account_id ? (acc.get(t.account_id)?.kind ?? null) : null }))) : h;
+  const deltas = hp.count ? compareCategories(hNow.byCategory, hp.byCategory) : [];
+  const deltaOf = new Map(deltas.map((x) => [x.label, x]));
+  const prevName = formatMonthLong(prev).split(" ")[0];
+  const periodo = partial ? `até o dia ${Number(today.slice(8))}` : "o mês inteiro";
+  const outDiff = hNow.totalOut - hp.totalOut;
+  const ups = deltas.filter((x) => x.diff >= 2000).slice(0, 4);
+  const downs = deltas.filter((x) => x.diff <= -2000).slice(0, 4);
   const maxCat = Math.max(...h.byCategory.map((c) => c.cents), 1);
   const name = formatMonthLong(month).split(" ")[0];
 
@@ -76,6 +95,45 @@ async function Content({ month }: { month: string }) {
         </Panel>
       </div>
 
+      {hp.count > 0 && (
+        <Panel title={`Comparado a ${prevName}`} subtitle={`gastos de ${periodo}, nos dois meses`} icon={GitCompareArrows}>
+          <p className="text-sm">
+            Saiu <strong className="tabular-nums">{formatBRL(hNow.totalOut)}</strong> contra{" "}
+            <span className="tabular-nums">{formatBRL(hp.totalOut)}</span>:{" "}
+            <strong className={cn("tabular-nums", outDiff > 0 ? "text-destructive" : "text-positive")}>
+              {outDiff > 0 ? "+" : "−"}
+              {formatBRL(Math.abs(outDiff))}
+            </strong>
+            {hp.totalOut > 0 && <span className="text-muted-foreground"> ({outDiff > 0 ? "+" : "−"}{Math.abs(Math.round((outDiff / hp.totalOut) * 100))}%)</span>}
+          </p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {[
+              { title: "Subiu", list: ups, cls: "text-destructive" },
+              { title: "Caiu", list: downs, cls: "text-positive" },
+            ].map((g) => (
+              <div key={g.title}>
+                <p className="mb-1 text-xs text-muted-foreground">{g.title}</p>
+                {g.list.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">nada relevante</p>
+                ) : (
+                  <ul className="flex flex-col gap-1 text-sm">
+                    {g.list.map((x) => (
+                      <li key={x.label} className="flex justify-between gap-3">
+                        <span className="min-w-0 truncate">{x.label}</span>
+                        <span className={cn("shrink-0 whitespace-nowrap tabular-nums", g.cls)}>
+                          {x.diff > 0 ? "+" : "−"}
+                          {formatBRL(Math.abs(x.diff))} <span className="text-xs">({deltaLabel(x)})</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
       <Panel title="Para onde foi" subtitle="pela categoria que o banco deu" icon={PieChart}>
         <ul className="flex flex-col gap-2.5">
           {h.byCategory.map((c) => (
@@ -84,7 +142,14 @@ async function Content({ month }: { month: string }) {
                 <span>
                   {c.label} <span className="text-xs text-muted-foreground">({c.count})</span>
                 </span>
-                <span className="font-medium tabular-nums">{formatBRL(c.cents)}</span>
+                <span className="flex shrink-0 items-baseline gap-2 whitespace-nowrap">
+                  {deltaOf.has(c.label) && deltaLabel(deltaOf.get(c.label)!) !== "igual" && (
+                    <span className={cn("text-[11px] tabular-nums", deltaOf.get(c.label)!.diff > 0 ? "text-destructive" : "text-positive")}>
+                      {deltaLabel(deltaOf.get(c.label)!)}
+                    </span>
+                  )}
+                  <span className="font-medium tabular-nums">{formatBRL(c.cents)}</span>
+                </span>
               </div>
               <div className="h-1.5 rounded-full bg-primary" style={{ width: `${(c.cents / maxCat) * 100}%` }} />
             </li>
@@ -100,8 +165,8 @@ async function Content({ month }: { month: string }) {
           {h.biggest.map((t, i) => (
             <li key={i} className="flex items-center gap-3 py-2">
               <span className="w-11 shrink-0 text-xs text-muted-foreground tabular-nums">{formatDay(t.occurred_on)}</span>
-              <span className="min-w-0 flex-1 truncate">{t.description}</span>
-              <span className="font-medium tabular-nums">{formatBRL(t.amount_cents)}</span>
+              <span className="min-w-0 flex-1 line-clamp-2 break-words">{t.description}</span>
+              <span className="shrink-0 font-medium whitespace-nowrap tabular-nums">{formatBRL(t.amount_cents)}</span>
             </li>
           ))}
         </ul>

@@ -145,6 +145,90 @@ export type Database = {
         }
         Relationships: []
       }
+      month_snapshots: {
+        Row: {
+          bank_balance_cents: number | null
+          debt_remaining_cents: number | null
+          kind: string
+          month: string
+          projected_balance_cents: number | null
+          taken_at: string
+          user_id: string
+        }
+        Insert: {
+          bank_balance_cents?: number | null
+          debt_remaining_cents?: number | null
+          kind: string
+          month: string
+          projected_balance_cents?: number | null
+          taken_at?: string
+          user_id?: string
+        }
+        Update: {
+          bank_balance_cents?: number | null
+          debt_remaining_cents?: number | null
+          kind?: string
+          month?: string
+          projected_balance_cents?: number | null
+          taken_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      notification_log: {
+        Row: {
+          key: string
+          sent_at: string
+          user_id: string
+        }
+        Insert: {
+          key: string
+          sent_at?: string
+          user_id?: string
+        }
+        Update: {
+          key?: string
+          sent_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      push_subscriptions: {
+        Row: {
+          auth: string
+          created_at: string
+          device: string | null
+          endpoint: string
+          fail_count: number
+          id: string
+          last_ok_at: string | null
+          p256dh: string
+          user_id: string
+        }
+        Insert: {
+          auth: string
+          created_at?: string
+          device?: string | null
+          endpoint: string
+          fail_count?: number
+          id?: string
+          last_ok_at?: string | null
+          p256dh: string
+          user_id?: string
+        }
+        Update: {
+          auth?: string
+          created_at?: string
+          device?: string | null
+          endpoint?: string
+          fail_count?: number
+          id?: string
+          last_ok_at?: string | null
+          p256dh?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       oauth_codes: {
         Row: {
           client_id: string
@@ -615,6 +699,7 @@ export type Database = {
       }
       settings: {
         Row: {
+          notifications: Json
           label_lazer: string
           label_mercado: string
           self_names: string[]
@@ -625,6 +710,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          notifications?: Json
           label_lazer?: string
           label_mercado?: string
           self_names?: string[]
@@ -635,6 +721,7 @@ export type Database = {
           user_id?: string
         }
         Update: {
+          notifications?: Json
           label_lazer?: string
           label_mercado?: string
           self_names?: string[]

@@ -35,9 +35,9 @@ export interface Anchor {
 }
 
 /** Entrada planejada já recebida = existe entrada do banco no mês com valor a até 5% dela. */
-export function pendingIncomes(planned: AnchorInput["plannedIncomes"], bank: AnchorInput["bankIncomes"]) {
+export function pendingIncomes<P extends AnchorInput["plannedIncomes"][number]>(planned: P[], bank: AnchorInput["bankIncomes"]): P[] {
   const free = [...bank];
-  const pending: AnchorInput["plannedIncomes"] = [];
+  const pending: P[] = [];
   for (const p of planned) {
     const i = free.findIndex((b) => Math.abs(b.amount_cents - p.amount_cents) <= p.amount_cents * 0.05);
     if (i >= 0) free.splice(i, 1);

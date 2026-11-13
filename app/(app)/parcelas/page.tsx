@@ -51,7 +51,7 @@ export default async function ParcelasPage() {
                   </p>
                   {p.notes && <p className="text-xs text-muted-foreground">{p.notes}</p>}
                 </div>
-                <div className="text-right tabular-nums">
+                <div className="shrink-0 text-right whitespace-nowrap tabular-nums">
                   <p className="font-medium">{formatBRL(p.installment_cents)}</p>
                   <p className="text-xs text-muted-foreground">falta {formatBRLShort(p.installment_cents * p.remaining)}</p>
                 </div>

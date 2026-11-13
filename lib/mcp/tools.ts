@@ -12,9 +12,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { findDuplicates } from "@/lib/duplicates";
 import { dailyDetail, healthReport, invoiceDetail } from "@/lib/mcp/views";
 import { billCyclePayments } from "@/lib/cards";
-import { AUTO_DEBIT, dayInMonth, decodeCursor, encodeCursor, incomesReport, likelyDay, matches, subscriptionStats, upcomingDue, type DueItem } from "@/lib/mcp/phase2";
+import { decodeCursor, encodeCursor, incomesReport, matches, subscriptionStats, upcomingDue, type DueItem } from "@/lib/mcp/phase2";
 import { simulatePurchase } from "@/lib/simulate";
-import { pendingIncomes } from "@/lib/anchor";
+import { monthSchedule } from "@/lib/schedule";
 import { buildGasto, remainingFor, scopesOf } from "@/lib/mcp/write";
 
 /**
@@ -705,44 +705,16 @@ function registerDailyTools(server: McpServer) {
       const d = await dataFor(ctx as Ctx);
       const today = todayISO();
       const until = addDays(today, dias ?? 7);
-      const inputs = invoiceInputs(d);
-      const txById = new Map(d.transactions.map((t) => [t.id, t]));
+      // mesma agenda do Calendário (lib/schedule): faturas e fixos não pagos; entradas previstas com data provável
       const items: DueItem[] = [];
       for (const month of [...new Set([monthOf(today), monthOf(until)])]) {
-        const { bills } = billsForMonth({ ...inputs, month, payments: d.payments });
-        for (const b of bills.filter((x) => !x.paid)) {
-          if (b.key.startsWith("card:")) {
-            const acc = d.accounts.find((a) => `card:${a.id}` === b.key);
-            const bill = d.cardBills.find((x) => x.account_id === acc?.id && x.due_date.startsWith(month.slice(0, 7)));
-            const due = bill?.due_date ?? (acc?.due_day ? dayInMonth(month, acc.due_day) : null);
-            // débito automático: o cartão teve "PAGTO DEBITO AUTOMATICO" nos últimos 100 dias. Mesmo que você
-            // adiante parte da fatura on-line, o que sobra é debitado no vencimento
-            const autoPay = d.transactions.some(
-              (t) => t.account_id === acc?.id && t.is_inflow && t.occurred_on >= addDays(today, -100) && AUTO_DEBIT.test(t.description),
-            );
-            items.push({ name: b.name, cents: b.cents, due, autoDebit: autoPay, kind: "fatura" });
-          } else {
-            const fx = d.fixed.find((f) => `fixed:${f.id}` === b.key);
-            // dia provável: quando o mesmo fixo foi pago antes (marcação com a transação do banco)
-            const sameName = d.fixed.filter((f) => f.name === fx?.name).map((f) => `fixed:${f.id}`);
-            const pays = d.payments.filter((p) => sameName.includes(p.key) && p.transaction_id).map((p) => txById.get(p.transaction_id!)).filter(Boolean);
-            const day = likelyDay(pays.map((t) => t!.occurred_on));
-            const auto = pays.some((t) => AUTO_DEBIT.test(t!.description));
-            items.push({ name: b.name, cents: b.cents, due: day ? dayInMonth(month, day) : null, autoDebit: auto, kind: b.kind });
-          }
+        for (const x of monthSchedule(d, month, today)) {
+          if (x.type === "saida" && !x.paid) items.push({ name: x.name, cents: x.cents, due: x.date, autoDebit: x.autoDebit, kind: x.kind as DueItem["kind"] });
         }
       }
-      // entradas previstas ainda não recebidas, com o dia em que caíram no mês anterior
-      const month = monthOf(today);
-      const planned = d.incomes.filter((i) => i.month === month && i.source === "manual");
-      const pend = pendingIncomes(planned, d.incomes.filter((i) => i.month === month && i.source === "banco"));
-      const prevBank = d.incomes.filter((i) => i.month === addMonths(month, -1) && i.source === "banco" && i.transaction_id);
-      const incomes = pend.map((p) => {
-        const like = prevBank.find((b) => Math.abs(b.amount_cents - p.amount_cents) <= p.amount_cents * 0.05);
-        const on = like?.transaction_id ? txById.get(like.transaction_id)?.occurred_on : null;
-        const date = on ? dayInMonth(month, Number(on.slice(8, 10))) : null;
-        return { description: p.description, cents: p.amount_cents, date: date && date >= today ? date : null };
-      });
+      const incomes = monthSchedule(d, monthOf(today), today)
+        .filter((x) => x.type === "entrada" && !x.paid)
+        .map((x) => ({ description: x.name, cents: x.cents, date: x.date && x.date >= today ? x.date : null }));
       const bal = bankBalance(d);
       return json({
         hoje: today,

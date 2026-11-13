@@ -9,6 +9,7 @@ name: Sync dos bancos
 on:
   schedule:
     - cron: "15 */3 * * *" # a cada 3h, minuto 15 (o GitHub pode atrasar alguns minutos)
+    - cron: "0 0 * * *" # 21h de Brasília: resumo do dia por push
   workflow_dispatch: {}
 
 permissions: {}
@@ -20,6 +21,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Chamar /api/cron/sync
+        if: github.event.schedule != '0 0 * * *'
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           APP_URL: ${{ vars.APP_URL }}
@@ -30,4 +32,16 @@ jobs:
           echo "HTTP $status"
           # só o resumo (contagens), nunca dados bancários
           head -c 300 resp.json; echo
+          test "$status" = "200"
+      - name: Resumo do dia (/api/cron/resumo)
+        if: github.event.schedule == '0 0 * * *'
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          status=$(curl -sS -o resp.json -w '%{http_code}' --max-time 90 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "${APP_URL%/}/api/cron/resumo")
+          echo "HTTP $status"
+          head -c 200 resp.json; echo
           test "$status" = "200"

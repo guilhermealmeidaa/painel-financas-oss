@@ -1,14 +1,17 @@
-import { Rocket, Bot, CalendarCog, CalendarRange, CreditCard, HeartPulse, History, Inbox, LayoutGrid, Layers, Landmark, Menu, Repeat } from "lucide-react";
+import { Bell, Rocket, Bot, CalendarCog, CalendarDays, CalendarRange, CreditCard, FileText, Flag, HeartPulse, History, Inbox, LayoutGrid, Layers, Landmark, Menu, Repeat } from "lucide-react";
 
 /** Menu principal (sidebar no desktop). */
 export const NAV_ITEMS = [
   { href: "/", label: "Visão geral", icon: LayoutGrid },
   { href: "/planejamento", label: "Planejamento", icon: CalendarCog },
   { href: "/projecao", label: "Projeção", icon: CalendarRange },
+  { href: "/plano", label: "Plano", icon: Flag },
   { href: "/faturas", label: "Cartões", icon: CreditCard },
+  { href: "/calendario", label: "Calendário", icon: CalendarDays },
   { href: "/parcelas", label: "Parcelas", icon: Layers },
   { href: "/historico", label: "Histórico", icon: History },
   { href: "/assinaturas", label: "Assinaturas", icon: Repeat },
+  { href: "/relatorio", label: "Relatório", icon: FileText },
 ] as const;
 
 export const OPEN_FINANCE_ITEMS = [
@@ -17,6 +20,7 @@ export const OPEN_FINANCE_ITEMS = [
   { href: "/conexoes", label: "Conexões", icon: Landmark },
   { href: "/acesso-claude", label: "Acesso do Claude", icon: Bot },
   { href: "/saude-dos-dados", label: "Saúde dos dados", icon: HeartPulse },
+  { href: "/notificacoes", label: "Notificações", icon: Bell },
 ] as const;
 
 /** Barra de baixo do celular (5 itens). O resto fica em "Mais". */
@@ -29,7 +33,7 @@ export const MOBILE_ITEMS = [
 ] as const;
 
 /** Páginas que ficam dentro de "Mais" no celular (para destacar a aba). */
-export const MORE_PATHS = ["/mais", "/primeiros-passos", "/parcelas", "/historico", "/assinaturas", "/triagem", "/conexoes", "/acesso-claude", "/saude-dos-dados"];
+export const MORE_PATHS = ["/mais", "/primeiros-passos", "/plano", "/notificacoes", "/calendario", "/parcelas", "/historico", "/assinaturas", "/relatorio", "/triagem", "/conexoes", "/acesso-claude", "/saude-dos-dados"];
 
 export function isActive(pathname: string, href: string) {
   if (href === "/") return pathname === "/";

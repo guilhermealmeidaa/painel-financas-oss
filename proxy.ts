@@ -4,7 +4,8 @@ import { DEMO_PAGES } from "@/lib/demo-flag";
 
 // Fora do login por sessão: /login; /api/cron (valida CRON_SECRET); /api/mcp (exige token pf_… ou OAuth);
 // descoberta e endpoints públicos do OAuth (registro, token, revogação). O /oauth/authorize exige login.
-const PUBLIC_PATHS = ["/login", "/api/cron", "/api/mcp", "/.well-known", "/oauth/register", "/oauth/token", "/oauth/revoke"];
+// PWA: manifesto, ícones e service worker (sem dados). /api/atalhos: atalhos do iPhone, exigem token pf_ (como o MCP).
+const PUBLIC_PATHS = ["/login", "/api/cron", "/api/mcp", "/.well-known", "/oauth/register", "/oauth/token", "/oauth/revoke", "/manifest.webmanifest", "/sw.js", "/pwa", "/api/atalhos"];
 
 /** Caminho interno seguro para voltar depois do login (nunca outro site). */
 function safeNext(next: string | null): string | null {

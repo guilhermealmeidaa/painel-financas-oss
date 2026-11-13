@@ -6,7 +6,7 @@ import { BrandMark } from "@/components/brand-mark";
 /** Topo do celular: nome do app, triagem (com contador), tema e sair. No desktop isso fica na sidebar. */
 export function MobileTopBar({ triageCount = 0 }: { triageCount?: number }) {
   return (
-    <header className="mb-3 flex items-center justify-between surface px-4 py-3 lg:hidden">
+    <header className="mb-3 flex items-center justify-between surface px-4 py-3 lg:hidden print:hidden">
       <div className="flex items-center gap-3">
         <BrandMark />
         <div className="leading-tight">

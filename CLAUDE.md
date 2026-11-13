@@ -61,6 +61,8 @@ Módulos de `lib/` que mais importam:
 | `onboarding.ts` / `setup-status.ts` | Etapas da configuração e quais variáveis de ambiente faltam (só booleanos). |
 | `demo-data.ts` / `demo-flag.ts` | Modo demonstração. |
 | `mcp/tools.ts` | Ferramentas do MCP (`resumo_do_mes`, `projecao`, `transacoes`, `faturas`, `parcelas`, `contas`, `possiveis_duplicatas`, diagnóstico `saude`/`detalhe_fatura`/`detalhe_dia_a_dia`, `simular_compra`, `proximos_vencimentos`, `assinaturas`, `entradas` e a única de escrita, `lancar_gasto`). Toda resposta traz `gerado_em` e `versao`. |
+| `schedule.ts`, `debt.ts`, `compare.ts`, `anomalies.ts` | Agenda do mês (Calendário e `proximos_vencimentos`), dívidas do Plano, comparativo por categoria e gastos fora do padrão. Só leem dados. |
+| `alerts.ts`, `push.ts`, `notify-run.ts` | Alertas por push (cada um uma vez só, via `notification_log`), resumo das 21h e as fotos do mês (`month_snapshots`) que alimentam o planejado × realizado. Rodam no cron. |
 | `oauth.ts`, `oauth-authorize.ts`, `mcp-auth.ts` | Servidor OAuth 2.1 do conector do claude.ai (DCR sem estado, PKCE S256, tokens só como hash) e autenticação do `/api/mcp` (token `pf_` ou OAuth, limite de 120 chamadas/min). |
 | `mcp/views.ts` | Montagem das respostas de diagnóstico (puro e testado). Nada é recalculado aqui: os detalhes saem das mesmas funções que geram os totais (`invoicesForMonth`, `dailyTransactions`, `monthStatus`), por isso batem centavo a centavo. |
 

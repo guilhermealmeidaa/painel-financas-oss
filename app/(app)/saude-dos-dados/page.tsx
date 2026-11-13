@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { connection } from "next/server";
-import { AlertTriangle, CheckCircle2, HeartPulse } from "lucide-react";
+import { AlertTriangle, CheckCircle2, HeartPulse, TriangleAlert } from "lucide-react";
 import { PageHeader } from "@/components/month-header";
+import { AnomaliesList } from "@/components/anomalies-list";
+import { findAnomalies } from "@/lib/anomalies";
 import { Panel } from "@/components/panel";
-import { formatMonthLong, monthOf, todayISO, addMonths } from "@/lib/dates";
+import { formatMonthLong, monthOf, todayISO, addMonths, addDays } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
@@ -34,7 +36,7 @@ async function Content() {
   const today = todayISO();
   const month = monthOf(today);
   const next = addMonths(month, 1);
-  const [{ data: semCat }, { data: accounts }, { data: manual }, { data: fees }, { data: items }, { data: pendingIncomes }] = await Promise.all([
+  const [{ data: semCat }, { data: accounts }, { data: manual }, { data: fees }, { data: items }, { data: pendingIncomes }, { data: recent }] = await Promise.all([
     supabase
       .from("transactions")
       .select("amount_cents")
@@ -54,7 +56,16 @@ async function Content() {
     supabase.from("transactions").select("fee_cents").gt("fee_cents", 0).gte("occurred_on", month).lt("occurred_on", next),
     supabase.from("pluggy_items").select("connector_name, status, last_synced_at, consent_expires_at"),
     supabase.from("incomes").select("id").eq("source", "banco").eq("status", "auto"),
+    // 30 dias + 6 meses de histórico para saber o "normal" de cada comerciante
+    supabase
+      .from("transactions")
+      .select("id, occurred_on, description, amount_cents, account_id, bucket, is_inflow, external_id, total_installments, auto_reason")
+      .eq("superseded", false)
+      .gte("occurred_on", addDays(today, -215))
+      .limit(10000),
   ]);
+  const anomalies = findAnomalies(recent ?? [], today);
+  const accNames = new Map((accounts ?? []).map((a) => [a.id, a.name.trim()]));
   const cards = (accounts ?? []).filter((a) => a.kind === "credit_card");
   const seedUnlinked = cards.filter((a) => !a.pluggy_item_id);
   const bankCards = cards.filter((a) => a.pluggy_item_id);
@@ -115,6 +126,12 @@ async function Content() {
           <Check ok title={`Taxas de Pix no crédito em ${name}: ${formatBRL(feeTotal)}`} detail={`${fees?.length ?? 0} Pix pagos com cartão no mês.`} />
         </ul>
       </Panel>
+
+      <section id="fora-do-padrao" className="scroll-mt-24">
+        <Panel title="Fora do padrão" subtitle="últimos 30 dias: valor bem acima do normal, cobrança em dobro ou primeira compra alta" icon={TriangleAlert} iconClass="bg-warning/15 text-warning">
+          <AnomaliesList items={anomalies} accounts={accNames} />
+        </Panel>
+      </section>
 
       <Panel title="Último sync por conta">
         <ul className="divide-y divide-border text-sm">
